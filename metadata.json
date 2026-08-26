@@ -1,0 +1,6 @@
+{
+  "name": "Media Player",
+  "description": "High-performance, lightweight media player with hardware and software decoder support, gesture controls, FTP and SMB network streaming, private vault mode with .1ca encryption, and smooth seeking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

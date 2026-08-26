@@ -1,0 +1,111 @@
+name: Ultra-Fast Android Release APK Build (R8 Optimized)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Fast R8 Release Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17 (Temurin Fast Runtime)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle Build Tooling & Cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Grant Execute Permission for Gradle Wrapper
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          fi
+
+      - name: Prepare Persistent Signing Key for Update Compatibility
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS_NAME: ${{ secrets.KEY_ALIAS }}
+        run: |
+          mkdir -p keystore
+          if [ -n "$SIGNING_KEY_BASE64" ]; then
+            echo "Decoding release keystore from secrets..."
+            echo "$SIGNING_KEY_BASE64" | base64 --decode > keystore/release-key.jks
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/keystore/release-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=${STORE_PASS:-android}" >> $GITHUB_ENV
+            echo "KEY_ALIAS=${KEY_ALIAS_NAME:-mediaplayer}" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=${KEY_PASS:-android}" >> $GITHUB_ENV
+          else
+            echo "Generating persistent deterministic release keystore..."
+            keytool -genkeypair \
+              -alias "mediaplayer" \
+              -keypass "android" \
+              -keystore "keystore/release-key.jks" \
+              -storepass "android" \
+              -dname "CN=MediaPlayer, OU=App, O=AIStudio, L=MountainView, S=CA, C=US" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/keystore/release-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=mediaplayer" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
+          fi
+
+      - name: Build R8 Optimized Release APK (High Speed Parallel Engine)
+        run: |
+          GRADLE_CMD="./gradlew"
+          if [ ! -f "$GRADLE_CMD" ]; then
+            GRADLE_CMD="gradle"
+          fi
+          $GRADLE_CMD assembleRelease \
+            --parallel \
+            --build-cache \
+            --configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx4096m -XX:+UseParallelGC -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.parallel=true \
+            -Dorg.gradle.caching=true
+
+      - name: Collect Release APK
+        run: |
+          mkdir -p artifacts
+          APK_FILE=$(find app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
+          if [ -f "$APK_FILE" ]; then
+            cp "$APK_FILE" artifacts/MediaPlayer-release-optimized.apk
+            echo "=========================================="
+            echo "Release APK ready for distribution:"
+            ls -lh artifacts/MediaPlayer-release-optimized.apk
+            echo "=========================================="
+          else
+            echo "Error: Release APK was not found!"
+            exit 1
+          fi
+
+      - name: Upload APK to Artifacts (No Tag / Release Created)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaPlayer-Release-APK
+          path: artifacts/MediaPlayer-release-optimized.apk
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
