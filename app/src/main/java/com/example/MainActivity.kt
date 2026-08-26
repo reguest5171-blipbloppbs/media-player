@@ -19,6 +19,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import coil.Coil
+import coil.ImageLoader
+import coil.decode.VideoFrameDecoder
 import com.example.data.model.VideoMediaItem
 import com.example.ui.screens.library.LibraryScreen
 import com.example.ui.screens.player.PlayerScreen
@@ -48,6 +51,17 @@ class MainActivity : ComponentActivity() {
                 android.graphics.Color.TRANSPARENT
             )
         )
+
+        // Initialize Coil ImageLoader with VideoFrameDecoder for video thumbnails
+        try {
+            val imageLoader = ImageLoader.Builder(this)
+                .components {
+                    add(VideoFrameDecoder.Factory())
+                }
+                .crossfade(true)
+                .build()
+            Coil.setImageLoader(imageLoader)
+        } catch (_: Exception) {}
 
         setContent {
             MyApplicationTheme {

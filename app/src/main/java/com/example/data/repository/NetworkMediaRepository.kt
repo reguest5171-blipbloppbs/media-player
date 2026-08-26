@@ -6,9 +6,12 @@ import com.example.data.local.entity.NetworkServerEntity
 import com.example.data.local.entity.StreamBookmarkEntity
 import com.example.data.model.StreamType
 import com.example.data.model.VideoMediaItem
-import jcifs.Config
-import jcifs.smb.NtlmPasswordAuthentication
+import jcifs.CIFSContext
+import jcifs.config.PropertyConfiguration
+import jcifs.context.BaseContext
+import jcifs.smb.NtlmPasswordAuthenticator
 import jcifs.smb.SmbFile
+import java.util.Properties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -201,21 +204,39 @@ class NetworkMediaRepository(
         }
     }
 
+    fun getCifsContext(server: NetworkServerEntity): CIFSContext {
+        val props = Properties().apply {
+            setProperty("jcifs.smb.client.enableSMB2", "true")
+            setProperty("jcifs.smb.client.disableSMB1", "false")
+            setProperty("jcifs.smb.client.minVersion", "SMB1")
+            setProperty("jcifs.smb.client.maxVersion", "SMB311")
+            setProperty("jcifs.smb.client.responseTimeout", "6000")
+            setProperty("jcifs.smb.client.soTimeout", "6000")
+            setProperty("jcifs.smb.client.connTimeout", "5000")
+            setProperty("jcifs.smb.client.ipcSigningEnforced", "false")
+            setProperty("jcifs.smb.client.useSMB2Negotiation", "true")
+        }
+        val config = PropertyConfiguration(props)
+        val base = BaseContext(config)
+        return if (server.isAnonymous || server.username.isBlank()) {
+            base.withAnonymousCredentials()
+        } else {
+            base.withCredentials(
+                NtlmPasswordAuthenticator(
+                    null,
+                    server.username.trim(),
+                    server.password
+                )
+            )
+        }
+    }
+
     private fun listSmbFilesInternal(
         server: NetworkServerEntity,
         remotePath: String
     ): Result<List<NetworkFileItem>> {
         try {
-            // Configure JCIFS timeouts
-            Config.setProperty("jcifs.smb.client.responseTimeout", "5000")
-            Config.setProperty("jcifs.smb.client.soTimeout", "5000")
-            Config.setProperty("jcifs.netbios.retryTimeout", "2500")
-
-            val auth = if (server.isAnonymous || server.username.isBlank()) {
-                NtlmPasswordAuthentication.ANONYMOUS
-            } else {
-                NtlmPasswordAuthentication("", server.username, server.password)
-            }
+            val cifsContext = getCifsContext(server)
 
             val sanitizedPath = remotePath.trim().removePrefix("/")
             val smbUrl = if (sanitizedPath.isBlank()) {
@@ -225,7 +246,7 @@ class NetworkMediaRepository(
                 "smb://${server.host}/$pathWithSlash"
             }
 
-            val smbDir = SmbFile(smbUrl, auth)
+            val smbDir = SmbFile(smbUrl, cifsContext)
             smbDir.connect()
 
             val files = smbDir.listFiles() ?: emptyArray()
@@ -265,7 +286,7 @@ class NetworkMediaRepository(
 
             return Result.success(resultList.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })))
         } catch (e: Exception) {
-            return Result.failure(IOException("SMB/Samba error: ${e.localizedMessage ?: "Tidak dapat membuka folder Samba"}"))
+            return Result.failure(IOException("SMB/Samba error: ${e.localizedMessage ?: "Tidak dapat membuka folder Samba (0x80090305 / timeout)"}"))
         }
     }
 

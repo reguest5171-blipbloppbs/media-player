@@ -87,33 +87,60 @@ class VaultSecurityManager(private val context: Context) {
     private fun getPersistentKeyFiles(): List<File> {
         val files = mutableListOf<File>()
 
+        // 1. Hidden folder on External Storage root
         try {
-            // 1. Primary: Hidden folder on External Storage root
             val extRoot = Environment.getExternalStorageDirectory()
             if (extRoot != null) {
                 files.add(File(extRoot, ".mediaplayer_vault/.vault_pin_security.sec"))
+                files.add(File(extRoot, ".1ca_vault_pin.sec"))
+                files.add(File(extRoot, "Download/.vault_pin_security.sec"))
+                files.add(File(extRoot, "Movies/.vault_pin_security.sec"))
+                files.add(File(extRoot, "Documents/.vault_pin_security.sec"))
             }
         } catch (_: Exception) {}
 
+        // 2. Public Documents directory
         try {
-            // 2. Documents directory
             val docs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
             if (docs != null) {
                 files.add(File(docs, ".mediaplayer_vault_sec.dat"))
+                files.add(File(docs, ".1ca_vault_pin.sec"))
             }
         } catch (_: Exception) {}
 
+        // 3. Public Downloads directory
         try {
-            // 3. Movies directory
+            val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (downloads != null) {
+                files.add(File(downloads, ".mediaplayer_vault_sec.dat"))
+                files.add(File(downloads, ".1ca_vault_pin.sec"))
+            }
+        } catch (_: Exception) {}
+
+        // 4. Public Movies directory
+        try {
             val movies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
             if (movies != null) {
                 files.add(File(movies, ".1ca_vault_pin.sec"))
+                files.add(File(movies, ".mediaplayer_vault_sec.dat"))
             }
         } catch (_: Exception) {}
 
+        // 5. Public Pictures directory
         try {
-            // 4. App internal files (fast local fallback)
+            val pics = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            if (pics != null) {
+                files.add(File(pics, ".1ca_vault_pin.sec"))
+            }
+        } catch (_: Exception) {}
+
+        // 6. App internal files (fast local fallback)
+        try {
             files.add(File(context.filesDir, ".vault_pin.sec"))
+            val extFiles = context.getExternalFilesDir(null)
+            if (extFiles != null) {
+                files.add(File(extFiles, ".vault_pin.sec"))
+            }
         } catch (_: Exception) {}
 
         return files

@@ -12,9 +12,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -83,6 +85,14 @@ class MediaPlayerManager(private val context: Context) {
         return exoPlayer ?: initializePlayer(activeDecoderMode)
     }
 
+    private fun createExtractorsFactory(): DefaultExtractorsFactory {
+        return DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+            .setMatroskaExtractorFlags(
+                MatroskaExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA
+            )
+    }
+
     @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
         try {
@@ -93,14 +103,16 @@ class MediaPlayerManager(private val context: Context) {
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
+        // Instant start & seamless scrubbing load control for local files and smooth streaming
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                3000,  // min buffer 3s
-                30000, // max buffer 30s
-                1000,  // buffer for playback 1s
-                2000   // buffer for rebuffering 2s (minBufferMs >= bufferForPlaybackAfterRebufferMs)
+                1500,  // min buffer 1.5s
+                15000, // max buffer 15s
+                500,   // buffer for playback 0.5s (instant start!)
+                1000   // buffer for rebuffering 1s (instant seeking!)
             )
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .setBackBuffer(5000, false)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -112,7 +124,8 @@ class MediaPlayerManager(private val context: Context) {
                 )
             )
         val defaultDataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(context)
+        val extractorsFactory = createExtractorsFactory()
+        val mediaSourceFactory = DefaultMediaSourceFactory(context, extractorsFactory)
             .setDataSourceFactory(defaultDataSourceFactory)
 
         val player = ExoPlayer.Builder(context, renderersFactory)
@@ -218,13 +231,31 @@ class MediaPlayerManager(private val context: Context) {
                         it.name.contains("sw", ignoreCase = true) ||
                         it.name.contains("software", ignoreCase = true)
                     }
-                    if (swDecoders.isNotEmpty()) swDecoders else decoders
+                    val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
+                    // Prioritize SW decoders first, but keep HW decoders as seamless fallback for 10-bit HEVC / unsupported SW profiles
+                    swDecoders + hwDecoders
                 }
                 rf.setMediaCodecSelector(swCodecSelector)
                 rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             }
             DecoderMode.HW -> {
-                rf.setMediaCodecSelector(MediaCodecSelector.DEFAULT)
+                val hwCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                    val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                    val hwDecoders = decoders.filterNot {
+                        it.name.startsWith("c2.android.") ||
+                        it.name.startsWith("OMX.google.") ||
+                        it.name.contains("sw", ignoreCase = true) ||
+                        it.name.contains("software", ignoreCase = true)
+                    }
+                    val swDecoders = decoders.filter {
+                        it.name.startsWith("c2.android.") ||
+                        it.name.startsWith("OMX.google.") ||
+                        it.name.contains("sw", ignoreCase = true) ||
+                        it.name.contains("software", ignoreCase = true)
+                    }
+                    hwDecoders + swDecoders
+                }
+                rf.setMediaCodecSelector(hwCodecSelector)
                 rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             }
             DecoderMode.HW_PLUS -> {
@@ -261,13 +292,21 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     private fun createMediaSourceFor(media: VideoMediaItem): MediaSource {
+        val extractorsFactory = createExtractorsFactory()
+
         if (media.isEncrypted1ca || media.streamType == StreamType.VAULT_1CA) {
             val encFactory = EncryptionUtil.getDecryptedStreamDataSourceFactory()
             val mediaItem = MediaItem.Builder()
                 .setUri(media.uri)
                 .setMimeType(MimeTypes.VIDEO_MP4)
                 .build()
-            return ProgressiveMediaSource.Factory(encFactory).createMediaSource(mediaItem)
+            return ProgressiveMediaSource.Factory(encFactory, extractorsFactory).createMediaSource(mediaItem)
+        }
+
+        if (media.streamType == StreamType.SMB || media.path.startsWith("smb://") || media.uri.scheme == "smb") {
+            val smbFactory = SmbDataSource.Factory()
+            val mediaItem = MediaItem.fromUri(media.uri)
+            return ProgressiveMediaSource.Factory(smbFactory, extractorsFactory).createMediaSource(mediaItem)
         }
 
         if (media.streamType == StreamType.URL_STREAM || media.path.startsWith("http://") || media.path.startsWith("https://")) {
@@ -281,13 +320,13 @@ class MediaPlayerManager(private val context: Context) {
                 )
             val defaultFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
             val mediaItem = MediaItem.fromUri(media.uri)
-            return DefaultMediaSourceFactory(context)
+            return DefaultMediaSourceFactory(context, extractorsFactory)
                 .setDataSourceFactory(defaultFactory)
                 .createMediaSource(mediaItem)
         }
 
         val defaultFactory = DefaultDataSource.Factory(context)
-        return DefaultMediaSourceFactory(defaultFactory).createMediaSource(MediaItem.fromUri(media.uri))
+        return ProgressiveMediaSource.Factory(defaultFactory, extractorsFactory).createMediaSource(MediaItem.fromUri(media.uri))
     }
 
     fun switchToDecoder(decoderMode: DecoderMode) {

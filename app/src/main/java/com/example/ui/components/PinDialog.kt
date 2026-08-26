@@ -488,23 +488,6 @@ fun PinDialog(
                         }
                     }
                 }
-
-                // Bottom actions (Reset / Remove PIN if configured)
-                if (mode == PinDialogMode.CHANGE_PIN && onRemovePin != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    TextButton(
-                        onClick = {
-                            onRemovePin()
-                            onDismiss()
-                        }
-                    ) {
-                        Text(
-                            text = "Hapus Proteksi PIN",
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
             }
         }
     }
