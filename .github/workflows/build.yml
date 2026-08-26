@@ -35,12 +35,6 @@ jobs:
           gradle-version: "9.3.1"
           cache-read-only: false
 
-      - name: Grant Execute Permission for Gradle Wrapper
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-          fi
-
       - name: Prepare Persistent Signing Key for Update Compatibility
         env:
           SIGNING_KEY_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -75,11 +69,7 @@ jobs:
 
       - name: Build R8 Optimized Release APK (High Speed Parallel Engine)
         run: |
-          GRADLE_CMD="./gradlew"
-          if [ ! -f "$GRADLE_CMD" ]; then
-            GRADLE_CMD="gradle"
-          fi
-          $GRADLE_CMD assembleRelease \
+          gradle assembleRelease \
             --parallel \
             --build-cache \
             --configuration-cache \
