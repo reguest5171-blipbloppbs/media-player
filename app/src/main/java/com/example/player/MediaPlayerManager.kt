@@ -6,24 +6,23 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
-import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
-import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.ui.AspectRatioFrameLayout
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.DecoderMode
 import com.example.data.model.StreamType
@@ -32,7 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
-import java.util.Collections
 import java.util.concurrent.TimeUnit
 
 data class PlayerTrackInfo(
@@ -71,35 +69,49 @@ class MediaPlayerManager(private val context: Context) {
 
     private var currentMediaItem: VideoMediaItem? = null
     private var activeDecoderMode: DecoderMode = DecoderMode.HW
+    private var fallbackAttempted: Boolean = false
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .retryOnConnectionFailure(true)
         .build()
 
     fun getPlayer(): ExoPlayer {
         return exoPlayer ?: initializePlayer(activeDecoderMode)
     }
 
+    @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
-        exoPlayer?.release()
+        try {
+            exoPlayer?.release()
+        } catch (_: Exception) {}
+
         activeDecoderMode = decoderMode
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                500, // min buffer 0.5s for instant scrub & playback
-                15000, // max buffer 15s
-                500, // buffer for playback 0.5s
-                1000 // buffer for rebuffering 1s
+                3000,  // min buffer 3s
+                30000, // max buffer 30s
+                1000,  // buffer for playback 1s
+                2000   // buffer for rebuffering 2s (minBufferMs >= bufferForPlaybackAfterRebufferMs)
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
-        val defaultDataSourceFactory = DefaultDataSource.Factory(context)
-        val encryptedDataSourceFactory = EncryptionUtil.getDecryptedStreamDataSourceFactory()
-
+        val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
+            .setDefaultRequestProperties(
+                mapOf(
+                    "Accept" to "*/*",
+                    "Connection" to "keep-alive"
+                )
+            )
+        val defaultDataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
             .setDataSourceFactory(defaultDataSourceFactory)
 
@@ -134,29 +146,70 @@ class MediaPlayerManager(private val context: Context) {
                 updateTracksList(tracks)
             }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                // If HW decoder fails on low-end device or unsupported codec profile, auto fallback to SW decoder
-                if (activeDecoderMode != DecoderMode.SW) {
+            override fun onPlayerError(error: PlaybackException) {
+                // Check if the root cause or inner cause is HttpDataSource / network error
+                var isNetworkError = false
+                var httpStatusCode = 0
+                var currentCause: Throwable? = error
+                while (currentCause != null) {
+                    if (currentCause is HttpDataSource.InvalidResponseCodeException) {
+                        isNetworkError = true
+                        httpStatusCode = currentCause.responseCode
+                        break
+                    } else if (currentCause is HttpDataSource.HttpDataSourceException ||
+                               currentCause is java.net.SocketTimeoutException ||
+                               currentCause is java.net.UnknownHostException ||
+                               currentCause is java.net.ConnectException) {
+                        isNetworkError = true
+                        break
+                    }
+                    currentCause = currentCause.cause
+                }
+
+                val isDecoderError = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+
+                // If HW decoder fails on low-end device, auto fallback to SW decoder once (only for decoder/codec errors, NOT network/404/403 errors)
+                if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
+                    fallbackAttempted = true
                     switchToDecoder(DecoderMode.SW)
                 } else {
+                    val msg = when {
+                        httpStatusCode == 404 -> "Video / URL streaming tidak ditemukan di server (HTTP 404 Not Found)."
+                        httpStatusCode == 403 -> "Akses streaming ditolak oleh server (HTTP 403 Forbidden). Server membatasi akses URL ini."
+                        httpStatusCode in 500..599 -> "Server video sedang mengalami kendala (HTTP $httpStatusCode Server Error)."
+                        httpStatusCode > 0 -> "Gagal memuat URL streaming (HTTP $httpStatusCode)."
+                        isNetworkError -> "Gagal menghubungkan ke server streaming. Periksa koneksi internet Anda."
+                        isDecoderError -> "Codec video tidak didukung oleh perangkat keras (Hardware Error). Coba alihkan ke mode SW (Software Decoder)."
+                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "Format kontainer file video tidak didukung."
+                        else -> error.localizedMessage ?: "Gagal memutar video (Error ${error.errorCodeName})"
+                    }
                     _playerState.value = _playerState.value.copy(
-                        errorMessage = error.localizedMessage ?: "Playback error: codec not supported"
+                        isLoading = false,
+                        errorMessage = msg
                     )
                 }
             }
         })
 
         exoPlayer = player
-        _playerState.value = _playerState.value.copy(decoderMode = decoderMode)
+        _playerState.value = _playerState.value.copy(
+            decoderMode = decoderMode,
+            errorMessage = null
+        )
         return player
     }
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
         val rf = DefaultRenderersFactory(context)
+        // Enable decoder fallback so ExoPlayer automatically falls back to secondary/software codec if primary fails
+        rf.setEnableDecoderFallback(true)
 
         when (decoderMode) {
             DecoderMode.SW -> {
-                // Software decoder selector prioritizes Google/AOSP software decoders
                 val swCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
                     val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
                     val swDecoders = decoders.filter {
@@ -171,7 +224,6 @@ class MediaPlayerManager(private val context: Context) {
                 rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             }
             DecoderMode.HW -> {
-                // Prefer Hardware decoder
                 rf.setMediaCodecSelector(MediaCodecSelector.DEFAULT)
                 rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             }
@@ -184,21 +236,28 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun playMedia(media: VideoMediaItem, startPositionMs: Long = 0L) {
+        fallbackAttempted = false
         val player = getPlayer()
         currentMediaItem = media
 
-        val mediaSource = createMediaSourceFor(media)
-        player.setMediaSource(mediaSource)
-        player.prepare()
-        if (startPositionMs > 0) {
-            player.seekTo(startPositionMs)
-        }
-        player.playWhenReady = true
+        try {
+            val mediaSource = createMediaSourceFor(media)
+            player.setMediaSource(mediaSource)
+            player.prepare()
+            if (startPositionMs > 0) {
+                player.seekTo(startPositionMs)
+            }
+            player.playWhenReady = true
 
-        _playerState.value = _playerState.value.copy(
-            errorMessage = null,
-            videoCodecName = media.codec
-        )
+            _playerState.value = _playerState.value.copy(
+                errorMessage = null,
+                videoCodecName = media.codec
+            )
+        } catch (e: Exception) {
+            _playerState.value = _playerState.value.copy(
+                errorMessage = "Gagal memuat video: ${e.localizedMessage ?: "Unknown error"}"
+            )
+        }
     }
 
     private fun createMediaSourceFor(media: VideoMediaItem): MediaSource {
@@ -213,9 +272,18 @@ class MediaPlayerManager(private val context: Context) {
 
         if (media.streamType == StreamType.URL_STREAM || media.path.startsWith("http://") || media.path.startsWith("https://")) {
             val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
+                .setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
+                .setDefaultRequestProperties(
+                    mapOf(
+                        "Accept" to "*/*",
+                        "Connection" to "keep-alive"
+                    )
+                )
             val defaultFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
             val mediaItem = MediaItem.fromUri(media.uri)
-            return DefaultMediaSourceFactory(defaultFactory).createMediaSource(mediaItem)
+            return DefaultMediaSourceFactory(context)
+                .setDataSourceFactory(defaultFactory)
+                .createMediaSource(mediaItem)
         }
 
         val defaultFactory = DefaultDataSource.Factory(context)
@@ -223,9 +291,9 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun switchToDecoder(decoderMode: DecoderMode) {
-        val player = exoPlayer ?: return
-        val currentPos = player.currentPosition
-        val currentPlayWhenReady = player.playWhenReady
+        val player = exoPlayer
+        val currentPos = player?.currentPosition ?: 0L
+        val currentPlayWhenReady = player?.playWhenReady ?: true
         val media = currentMediaItem
 
         initializePlayer(decoderMode)
@@ -302,12 +370,16 @@ class MediaPlayerManager(private val context: Context) {
     fun selectAudioTrack(trackInfo: PlayerTrackInfo) {
         val player = exoPlayer ?: return
         val tracks = player.currentTracks
-        val group = tracks.groups[trackInfo.trackGroupIndex]
-        val override = TrackSelectionOverride(group.mediaTrackGroup, trackInfo.trackIndex)
-        player.trackSelectionParameters = player.trackSelectionParameters
-            .buildUpon()
-            .setOverrideForType(override)
-            .build()
+        if (trackInfo.trackGroupIndex < tracks.groups.size) {
+            val group = tracks.groups[trackInfo.trackGroupIndex]
+            if (trackInfo.trackIndex < group.length) {
+                val override = TrackSelectionOverride(group.mediaTrackGroup, trackInfo.trackIndex)
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setOverrideForType(override)
+                    .build()
+            }
+        }
     }
 
     fun selectSubtitleTrack(trackInfo: PlayerTrackInfo?) {
@@ -320,13 +392,17 @@ class MediaPlayerManager(private val context: Context) {
                 .build()
         } else {
             val tracks = player.currentTracks
-            val group = tracks.groups[trackInfo.trackGroupIndex]
-            val override = TrackSelectionOverride(group.mediaTrackGroup, trackInfo.trackIndex)
-            player.trackSelectionParameters = player.trackSelectionParameters
-                .buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                .setOverrideForType(override)
-                .build()
+            if (trackInfo.trackGroupIndex < tracks.groups.size) {
+                val group = tracks.groups[trackInfo.trackGroupIndex]
+                if (trackInfo.trackIndex < group.length) {
+                    val override = TrackSelectionOverride(group.mediaTrackGroup, trackInfo.trackIndex)
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setOverrideForType(override)
+                        .build()
+                }
+            }
         }
     }
 
@@ -390,7 +466,9 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun release() {
-        exoPlayer?.release()
+        try {
+            exoPlayer?.release()
+        } catch (_: Exception) {}
         exoPlayer = null
     }
 }

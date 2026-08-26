@@ -228,31 +228,35 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     // Gestures
     fun onBrightnessSwipe(delta: Float, activity: Activity) {
-        val window = activity.window
-        val lp = window.attributes
-        var current = if (lp.screenBrightness < 0) {
-            try {
-                Settings.System.getInt(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
-            } catch (e: Exception) { 0.5f }
-        } else lp.screenBrightness
+        try {
+            val window = activity.window
+            val lp = window.attributes
+            var current = if (lp.screenBrightness < 0) {
+                try {
+                    Settings.System.getInt(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+                } catch (e: Exception) { 0.5f }
+            } else lp.screenBrightness
 
-        current = (current + delta).coerceIn(0.01f, 1.0f)
-        lp.screenBrightness = current
-        window.attributes = lp
-        currentBrightness = current
+            current = (current + delta).coerceIn(0.01f, 1.0f)
+            lp.screenBrightness = current
+            window.attributes = lp
+            currentBrightness = current
 
-        showGestureOverlay(GestureType.BRIGHTNESS, (current * 100).toInt())
+            showGestureOverlay(GestureType.BRIGHTNESS, (current * 100).toInt())
+        } catch (_: Exception) {}
     }
 
     fun onVolumeSwipe(delta: Float) {
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val change = (delta * maxVolume).toInt()
-        val newVol = (currentVolume + change).coerceIn(0, maxVolume)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+        try {
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            val change = (delta * maxVolume).toInt()
+            val newVol = (currentVolume + change).coerceIn(0, maxVolume)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
 
-        val percent = if (maxVolume > 0) (newVol * 100) / maxVolume else 0
-        showGestureOverlay(GestureType.VOLUME, percent)
+            val percent = if (maxVolume > 0) (newVol * 100) / maxVolume else 0
+            showGestureOverlay(GestureType.VOLUME, percent)
+        } catch (_: Exception) {}
     }
 
     fun onSeekSwipe(deltaMs: Long) {

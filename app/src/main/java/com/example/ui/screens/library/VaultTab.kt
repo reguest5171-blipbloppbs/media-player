@@ -118,7 +118,7 @@ fun VaultTab(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Videos encrypted in .1ca format are protected here. They are hidden from standard gallery apps and system media scanners.",
+                        text = "Video terenkripsi .1ca disembunyikan dari galeri publik dan diamankan dengan 4-digit PIN. PIN tetap tersimpan aman walau data aplikasi dibersihkan.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -138,7 +138,7 @@ fun VaultTab(
                         ) {
                             Icon(imageVector = Icons.Default.LockOpen, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Unlock with PIN", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("Buka Kunci dengan PIN", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     } else {
                         Button(
@@ -151,7 +151,7 @@ fun VaultTab(
                         ) {
                             Icon(imageVector = Icons.Default.Shield, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Create Security PIN", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("Buat PIN Keamanan", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

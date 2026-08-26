@@ -29,6 +29,8 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_FAST_SEEK_SMOOTH = booleanPreferencesKey("fast_seek_smooth")
     }
 
+    val vaultSecurityManager = VaultSecurityManager(context)
+
     val pinCodeFlow: Flow<String?> = context.dataStore.data.map { preferences ->
         preferences[KEY_PIN_CODE]
     }
@@ -70,9 +72,11 @@ class UserPreferencesManager(private val context: Context) {
     }
 
     suspend fun setPinCode(pin: String) {
-        context.dataStore.edit { preferences ->
-            preferences[KEY_PIN_CODE] = pin
-        }
+        vaultSecurityManager.savePin(pin)
+    }
+
+    suspend fun clearPinCode() {
+        vaultSecurityManager.clearPin()
     }
 
     suspend fun setDefaultDecoder(decoder: String) {

@@ -6,9 +6,13 @@ import com.example.data.local.entity.NetworkServerEntity
 import com.example.data.local.entity.StreamBookmarkEntity
 import com.example.data.model.StreamType
 import com.example.data.model.VideoMediaItem
+import jcifs.Config
+import jcifs.smb.NtlmPasswordAuthentication
+import jcifs.smb.SmbFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPFile
@@ -23,6 +27,13 @@ data class NetworkFileItem(
     val streamUri: String
 )
 
+data class SampleStreamItem(
+    val title: String,
+    val url: String,
+    val description: String,
+    val formatTag: String
+)
+
 class NetworkMediaRepository(
     private val dao: MediaPlayerDao
 ) {
@@ -35,15 +46,103 @@ class NetworkMediaRepository(
     suspend fun addBookmark(bookmark: StreamBookmarkEntity): Long = dao.insertBookmark(bookmark)
     suspend fun removeBookmark(id: Long) = dao.deleteBookmark(id)
 
-    suspend fun listFtpFiles(
+    // Curated, 100% working and fast sample streaming URLs for instant testing
+    fun getPresetSampleStreams(): List<SampleStreamItem> {
+        return listOf(
+            SampleStreamItem(
+                title = "Big Buck Bunny (HLS Multi-Quality)",
+                url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                description = "HLS Adaptive Stream (1080p/720p/480p/360p)",
+                formatTag = "HLS M3U8"
+            ),
+            SampleStreamItem(
+                title = "Sintel (1080p Full HD MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+                description = "Google Storage High Bitrate 1080p MP4",
+                formatTag = "1080p MP4"
+            ),
+            SampleStreamItem(
+                title = "Big Buck Bunny (720p Fast MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                description = "Lightweight MP4 for legacy / HP kentang test",
+                formatTag = "720p MP4"
+            ),
+            SampleStreamItem(
+                title = "Tears of Steel (Sci-Fi 1080p)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+                description = "High Quality Cinematic Benchmark",
+                formatTag = "1080p MP4"
+            ),
+            SampleStreamItem(
+                title = "Elephant's Dream (Classic MKV/MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+                description = "Open Movie Project High Bitrate",
+                formatTag = "720p MP4"
+            ),
+            SampleStreamItem(
+                title = "Apple BipBop 16x9 Test Stream",
+                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
+                description = "Apple HLS Reference Test Pattern",
+                formatTag = "HLS M3U8"
+            ),
+            SampleStreamItem(
+                title = "For Bigger Blazes (Short Sample)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+                description = "Chromecast HD Short Test Clip",
+                formatTag = "1080p MP4"
+            ),
+            SampleStreamItem(
+                title = "We Are Going On Bullrun (HD Sample)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
+                description = "Google High Bitrate Test Stream",
+                formatTag = "1080p MP4"
+            )
+        )
+    }
+
+    suspend fun populatePresetSamplesIfEmpty() {
+        val sampleList = getPresetSampleStreams()
+        for (sample in sampleList) {
+            dao.insertBookmark(
+                StreamBookmarkEntity(
+                    title = sample.title,
+                    url = sample.url
+                )
+            )
+        }
+    }
+
+    suspend fun listNetworkFiles(
         server: NetworkServerEntity,
         remotePath: String
     ): Result<List<NetworkFileItem>> = withContext(Dispatchers.IO) {
+        try {
+            // Strict 7 seconds timeout so the app NEVER hangs on unreachable server
+            withTimeout(7000L) {
+                if (server.type.equals("SMB", ignoreCase = true)) {
+                    listSmbFilesInternal(server, remotePath)
+                } else {
+                    listFtpFilesInternal(server, remotePath)
+                }
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Result.failure(IOException("Koneksi timeout (7 detik). Pastikan IP/Host '${server.host}' dan Port ${server.port} dapat dijangkau di jaringan lokal."))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun listFtpFilesInternal(
+        server: NetworkServerEntity,
+        remotePath: String
+    ): Result<List<NetworkFileItem>> {
         val ftp = FTPClient()
         try {
-            ftp.defaultTimeout = 10000
+            ftp.defaultTimeout = 5000
+            ftp.connectTimeout = 5000
+            ftp.setDataTimeout(java.time.Duration.ofMillis(5000))
             ftp.connect(server.host, server.port)
-            
+
             val loginSuccess = if (server.isAnonymous || server.username.isBlank()) {
                 ftp.login("anonymous", "anonymous")
             } else {
@@ -51,7 +150,7 @@ class NetworkMediaRepository(
             }
 
             if (!loginSuccess) {
-                return@withContext Result.failure(IOException("FTP Authentication failed"))
+                return Result.failure(IOException("FTP Login gagal. Periksa username & password atau aktifkan Anonymous mode."))
             }
 
             ftp.enterLocalPassiveMode()
@@ -88,35 +187,105 @@ class NetworkMediaRepository(
                 }
             }
 
-            ftp.logout()
-            ftp.disconnect()
-            Result.success(resultList.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })))
+            try {
+                ftp.logout()
+                ftp.disconnect()
+            } catch (_: Exception) {}
+
+            return Result.success(resultList.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })))
         } catch (e: Exception) {
             try {
-                if (ftp.isConnected) {
-                    ftp.disconnect()
-                }
+                if (ftp.isConnected) ftp.disconnect()
             } catch (_: Exception) {}
-            Result.failure(e)
+            return Result.failure(e)
         }
     }
 
-    fun buildNetworkVideoItem(item: NetworkFileItem, serverName: String): VideoMediaItem {
+    private fun listSmbFilesInternal(
+        server: NetworkServerEntity,
+        remotePath: String
+    ): Result<List<NetworkFileItem>> {
+        try {
+            // Configure JCIFS timeouts
+            Config.setProperty("jcifs.smb.client.responseTimeout", "5000")
+            Config.setProperty("jcifs.smb.client.soTimeout", "5000")
+            Config.setProperty("jcifs.netbios.retryTimeout", "2500")
+
+            val auth = if (server.isAnonymous || server.username.isBlank()) {
+                NtlmPasswordAuthentication.ANONYMOUS
+            } else {
+                NtlmPasswordAuthentication("", server.username, server.password)
+            }
+
+            val sanitizedPath = remotePath.trim().removePrefix("/")
+            val smbUrl = if (sanitizedPath.isBlank()) {
+                "smb://${server.host}/"
+            } else {
+                val pathWithSlash = if (sanitizedPath.endsWith("/")) sanitizedPath else "$sanitizedPath/"
+                "smb://${server.host}/$pathWithSlash"
+            }
+
+            val smbDir = SmbFile(smbUrl, auth)
+            smbDir.connect()
+
+            val files = smbDir.listFiles() ?: emptyArray()
+            val resultList = mutableListOf<NetworkFileItem>()
+
+            for (file in files) {
+                try {
+                    val name = file.name.removeSuffix("/")
+                    if (name.isBlank() || name == "." || name == "..") continue
+                    val isDir = file.isDirectory
+                    val isVideo = isSupportedVideoExtension(name)
+
+                    if (isDir || isVideo) {
+                        val authPart = if (!server.isAnonymous && server.username.isNotBlank()) {
+                            "${server.username}:${server.password}@"
+                        } else ""
+
+                        val streamUrl = if (isDir) {
+                            file.url.toString()
+                        } else {
+                            "smb://${authPart}${server.host}/${sanitizedPath}${name}"
+                        }
+
+                        resultList.add(
+                            NetworkFileItem(
+                                name = name,
+                                path = file.path,
+                                isDirectory = isDir,
+                                sizeBytes = if (isDir) 0L else (try { file.length() } catch (_: Exception) { 0L }),
+                                lastModified = try { file.lastModified() } catch (_: Exception) { 0L },
+                                streamUri = streamUrl
+                            )
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
+
+            return Result.success(resultList.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() })))
+        } catch (e: Exception) {
+            return Result.failure(IOException("SMB/Samba error: ${e.localizedMessage ?: "Tidak dapat membuka folder Samba"}"))
+        }
+    }
+
+    fun buildNetworkVideoItem(item: NetworkFileItem, serverName: String, serverType: String = "FTP"): VideoMediaItem {
         val is1ca = item.name.endsWith(".1ca", ignoreCase = true)
+        val sType = if (serverType.equals("SMB", ignoreCase = true)) StreamType.SMB else StreamType.FTP
         return VideoMediaItem(
             id = item.streamUri.hashCode().toLong(),
             uri = Uri.parse(item.streamUri),
             path = item.streamUri,
             title = item.name,
             displayName = item.name,
-            durationMs = 0L, // Stream duration resolved during playback
+            durationMs = 0L,
             sizeBytes = item.sizeBytes,
             dateModified = item.lastModified,
             mimeType = if (is1ca) "application/octet-stream" else "video/*",
             folderPath = serverName,
             folderName = serverName,
             isEncrypted1ca = is1ca,
-            streamType = StreamType.FTP
+            streamType = sType
         )
     }
 

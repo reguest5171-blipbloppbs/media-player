@@ -128,7 +128,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadPreferencesAndScan() {
         viewModelScope.launch {
-            val pin = preferencesManager.pinCodeFlow.first()
+            // Restore PIN from persistent external storage if app data was cleared
+            val pin = preferencesManager.vaultSecurityManager.getOrRestorePin()
             _uiState.value = _uiState.value.copy(
                 hasPinConfigured = !pin.isNullOrBlank()
             )
@@ -137,6 +138,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (autoScan) {
                 scanMedia()
             }
+            // Auto populate preset test stream URLs so user has instant test videos
+            try {
+                val currentBookmarks = networkRepository.bookmarksFlow.first()
+                if (currentBookmarks.isEmpty()) {
+                    networkRepository.populatePresetSamplesIfEmpty()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun loadPresetSampleStreams() {
+        viewModelScope.launch {
+            networkRepository.populatePresetSamplesIfEmpty()
+            _uiState.value = _uiState.value.copy(messageSnackbar = "Preset contoh streaming berhasil dimuat!")
         }
     }
 
@@ -144,6 +159,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isScanning = true)
             try {
+                // Also ensure PIN is refreshed/restored if needed
+                val currentPin = preferencesManager.vaultSecurityManager.getOrRestorePin()
+                _uiState.value = _uiState.value.copy(hasPinConfigured = !currentPin.isNullOrBlank())
+
                 val videos = mediaRepository.scanLocalVideos(includeVault1ca = true)
                 _rawVideos.value = videos
             } catch (e: Exception) {
@@ -180,26 +199,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(selectedFolder = folder)
     }
 
+    fun clearSelectedFolder() {
+        _uiState.value = _uiState.value.copy(selectedFolder = null)
+    }
+
     // Lock Mode / PIN Management
     fun verifyPin(pin: String): Boolean {
         var correct = false
         viewModelScope.launch {
-            val savedPin = preferencesManager.pinCodeFlow.first()
-            if (savedPin == pin) {
+            val isMatch = preferencesManager.vaultSecurityManager.verifyPin(pin)
+            if (isMatch) {
                 correct = true
-                _uiState.value = _uiState.value.copy(isLockModeUnlocked = true)
+                _uiState.value = _uiState.value.copy(
+                    isLockModeUnlocked = true,
+                    hasPinConfigured = true
+                )
             }
         }
         return correct
     }
 
     suspend fun checkPinMatches(pin: String): Boolean {
-        val savedPin = preferencesManager.pinCodeFlow.first()
-        val match = savedPin == pin
-        if (match) {
-            _uiState.value = _uiState.value.copy(isLockModeUnlocked = true)
+        val isMatch = preferencesManager.vaultSecurityManager.verifyPin(pin)
+        if (isMatch) {
+            _uiState.value = _uiState.value.copy(
+                isLockModeUnlocked = true,
+                hasPinConfigured = true
+            )
         }
-        return match
+        return isMatch
     }
 
     fun configurePin(newPin: String) {
@@ -208,7 +236,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = _uiState.value.copy(
                 hasPinConfigured = true,
                 isLockModeUnlocked = true,
-                messageSnackbar = "Security PIN set successfully!"
+                messageSnackbar = "PIN Keamanan berhasil disimpan permanen!"
+            )
+        }
+    }
+
+    fun removePin() {
+        viewModelScope.launch {
+            preferencesManager.clearPinCode()
+            _uiState.value = _uiState.value.copy(
+                hasPinConfigured = false,
+                isLockModeUnlocked = false,
+                messageSnackbar = "PIN Keamanan berhasil dihapus"
             )
         }
     }
@@ -278,7 +317,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // FTP Navigation
+    // Network Navigation (FTP & SMB Samba)
     fun openFtpServer(server: NetworkServerEntity) {
         _uiState.value = _uiState.value.copy(
             ftpBrowsingServer = server,
@@ -296,7 +335,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun fetchFtpFiles(server: NetworkServerEntity, path: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(ftpLoading = true, ftpErrorMessage = null)
-            val result = networkRepository.listFtpFiles(server, path)
+            val result = networkRepository.listNetworkFiles(server, path)
             result.onSuccess { files ->
                 _uiState.value = _uiState.value.copy(
                     ftpFiles = files,
@@ -304,7 +343,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
-                    ftpErrorMessage = error.localizedMessage ?: "FTP Connection Error",
+                    ftpErrorMessage = error.localizedMessage ?: "${server.type} Connection Error",
                     ftpLoading = false
                 )
             }

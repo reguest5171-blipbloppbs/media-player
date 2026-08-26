@@ -43,6 +43,7 @@ credentials = "1.5.0"
 googleid = "1.1.1"
 media3 = "1.5.1"
 commonsNet = "3.10.0"
+jcifs = "1.3.17"
 
 
 [libraries]
@@ -109,6 +110,7 @@ media3-extractor = { group = "androidx.media3", name = "media3-extractor", versi
 media3-exoplayer-rtsp = { group = "androidx.media3", name = "media3-exoplayer-rtsp", version.ref = "media3" }
 media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 commons-net = { group = "commons-net", name = "commons-net", version.ref = "commonsNet" }
+jcifs = { group = "jcifs", name = "jcifs", version.ref = "jcifs" }
 
 
 [plugins]

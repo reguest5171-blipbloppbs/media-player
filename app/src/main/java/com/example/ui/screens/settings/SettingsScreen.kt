@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -252,14 +253,17 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (savedPin.isNullOrBlank()) "Set 4-Digit Security PIN" else "Change Security PIN",
+                                text = if (savedPin.isNullOrBlank()) "Atur 4-Digit PIN Keamanan" else "Ubah PIN Keamanan",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = if (savedPin.isNullOrBlank()) "Create PIN to protect .1ca encrypted videos" else "PIN is currently configured",
+                                text = if (savedPin.isNullOrBlank()) 
+                                    "Buat PIN untuk melindungi video rahasia .1ca (Tersimpan permanen)"
+                                else 
+                                    "PIN aktif • Tersimpan permanen walau Hapus Data Aplikasi",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (savedPin.isNullOrBlank()) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF2E7D32)
                             )
                         }
                     }
@@ -365,11 +369,16 @@ fun SettingsScreen(
     if (showPinDialog) {
         PinDialog(
             isSettingNewPin = true,
+            hasExistingPin = !savedPin.isNullOrBlank(),
+            onVerifyPin = { pin -> preferencesManager.vaultSecurityManager.verifyPin(pin) },
             onPinSuccess = { newPin ->
                 scope.launch { preferencesManager.setPinCode(newPin) }
                 showPinDialog = false
             },
-            onDismiss = { showPinDialog = false }
+            onDismiss = { showPinDialog = false },
+            onRemovePin = {
+                scope.launch { preferencesManager.clearPinCode() }
+            }
         )
     }
 }

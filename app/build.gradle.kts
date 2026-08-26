@@ -137,6 +137,7 @@ dependencies {
   implementation(libs.media3.exoplayer.rtsp)
   implementation(libs.media3.exoplayer.hls)
   implementation(libs.commons.net)
+  implementation(libs.jcifs)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

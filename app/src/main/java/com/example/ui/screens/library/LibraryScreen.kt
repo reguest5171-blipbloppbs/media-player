@@ -3,6 +3,7 @@ package com.example.ui.screens.library
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -134,6 +135,31 @@ fun LibraryScreen(
         uiState.messageSnackbar?.let { msg ->
             snackbarHostState.showSnackbar(msg)
             viewModel.clearMessageSnackbar()
+        }
+    }
+
+    // Intercept Back button so navigating back from folders, FTP/SMB browser, search or tabs does NOT close the app
+    BackHandler(
+        enabled = uiState.selectedFolder != null ||
+                uiState.ftpBrowsingServer != null ||
+                searchActive ||
+                uiState.activeTab != 0
+    ) {
+        if (searchActive) {
+            searchActive = false
+            viewModel.setSearchQuery("")
+        } else if (uiState.ftpBrowsingServer != null) {
+            val sanitized = uiState.ftpCurrentPath.trim().removeSuffix("/")
+            if (sanitized.isNotBlank() && sanitized != "/" && sanitized.contains("/")) {
+                val parent = sanitized.substringBeforeLast("/", "").ifBlank { "/" }
+                viewModel.navigateFtp(parent)
+            } else {
+                viewModel.closeFtpBrowser()
+            }
+        } else if (uiState.selectedFolder != null) {
+            viewModel.clearSelectedFolder()
+        } else if (uiState.activeTab != 0) {
+            viewModel.setActiveTab(0)
         }
     }
 
@@ -343,6 +369,7 @@ fun LibraryScreen(
                         },
                         onAddServerClick = { showAddServerDialog = true },
                         onAddBookmarkClick = { showAddStreamDialog = true },
+                        onLoadPresetSamples = { viewModel.loadPresetSampleStreams() },
                         onDeleteServer = { id -> viewModel.deleteNetworkServer(id) },
                         onDeleteBookmark = { id -> viewModel.deleteStreamBookmark(id) },
                         modifier = Modifier.fillMaxSize()
@@ -390,6 +417,8 @@ fun LibraryScreen(
     if (showPinDialog) {
         PinDialog(
             isSettingNewPin = isPinSetupMode,
+            hasExistingPin = uiState.hasPinConfigured,
+            onVerifyPin = { pin -> viewModel.checkPinMatches(pin) },
             onPinSuccess = { pin ->
                 showPinDialog = false
                 if (isPinSetupMode) {

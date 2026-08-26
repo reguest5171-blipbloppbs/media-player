@@ -5,6 +5,9 @@ import android.content.pm.ActivityInfo
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -123,21 +126,43 @@ fun PlayerScreen(
 
     val configuration = LocalConfiguration.current
 
-    // Follow video aspect ratio on initial load if configured
+    // Follow video aspect ratio on initial load if configured with safe try-catch
     LaunchedEffect(playerState.videoWidth, playerState.videoHeight) {
-        if (activity != null && playerState.videoWidth > 0 && playerState.videoHeight > 0) {
-            val isPortraitVideo = playerState.videoHeight > playerState.videoWidth
-            activity.requestedOrientation = if (isPortraitVideo) {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        try {
+            if (activity != null && playerState.videoWidth > 0 && playerState.videoHeight > 0) {
+                val isPortraitVideo = playerState.videoHeight > playerState.videoWidth
+                activity.requestedOrientation = if (isPortraitVideo) {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
             }
-        }
+        } catch (_: Exception) {}
+    }
+
+    // Seamlessly hide notification bar/navigation bar in full screen playback
+    LaunchedEffect(controlsVisible) {
+        val window = activity?.window ?: return@LaunchedEffect
+        try {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (controlsVisible) {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        } catch (_: Exception) {}
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            try {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                activity?.window?.let { win ->
+                    val controller = WindowCompat.getInsetsController(win, win.decorView)
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
+            } catch (_: Exception) {}
         }
     }
 
@@ -223,6 +248,8 @@ fun PlayerScreen(
                 PlayerView(ctx).apply {
                     player = viewModel.playerManager.getPlayer()
                     useController = false
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    keepScreenOn = true
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -230,19 +257,21 @@ fun PlayerScreen(
                 }
             },
             update = { playerView ->
-                playerView.player = viewModel.playerManager.getPlayer()
-                when (playerState.aspectRatioMode) {
-                    AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    AspectRatioMode.CROP -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    AspectRatioMode.STRETCH -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    AspectRatioMode.ORIGINAL -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
-                }
+                try {
+                    playerView.player = viewModel.playerManager.getPlayer()
+                    when (playerState.aspectRatioMode) {
+                        AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        AspectRatioMode.CROP -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioMode.STRETCH -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        AspectRatioMode.ORIGINAL -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                    }
+                } catch (_: Exception) {}
             },
             modifier = Modifier.fillMaxSize()
         )
 
         // Loading Spinner
-        if (playerState.isLoading) {
+        if (playerState.isLoading && playerState.errorMessage == null) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -252,6 +281,70 @@ fun PlayerScreen(
                     modifier = Modifier.size(52.dp),
                     strokeWidth = 4.dp
                 )
+            }
+        }
+
+        // Error Screen Overlay (If codec or file format fails on HP kentang)
+        if (playerState.errorMessage != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xDD000000))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AspectRatio,
+                            contentDescription = "Error",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Gagal Memutar Video",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = playerState.errorMessage ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = onBack,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Kembali")
+                            }
+                            androidx.compose.material3.Button(
+                                onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
+                                modifier = Modifier.weight(1f),
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("Mode SW")
+                            }
+                        }
+                    }
+                }
             }
         }
 

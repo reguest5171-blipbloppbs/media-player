@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
@@ -41,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -54,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.entity.NetworkServerEntity
 import com.example.data.local.entity.StreamBookmarkEntity
-import com.example.data.model.VideoMediaItem
 import com.example.data.repository.NetworkFileItem
 
 @Composable
@@ -73,12 +75,13 @@ fun NetworkTab(
     onPlayBookmark: (StreamBookmarkEntity) -> Unit,
     onAddServerClick: () -> Unit,
     onAddBookmarkClick: () -> Unit,
+    onLoadPresetSamples: () -> Unit,
     onDeleteServer: (Long) -> Unit,
     onDeleteBookmark: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (browsingServer != null) {
-        // FTP File Explorer View
+        // Network File Explorer View (FTP & SMB)
         Column(modifier = modifier.fillMaxSize()) {
             // Header
             Row(
@@ -89,10 +92,11 @@ fun NetworkTab(
             ) {
                 IconButton(
                     onClick = {
-                        if (currentFtpPath == "/" || currentFtpPath.isBlank()) {
+                        val sanitized = currentFtpPath.trim().removeSuffix("/")
+                        if (sanitized.isBlank() || sanitized == "/") {
                             onCloseFtp()
                         } else {
-                            val parent = currentFtpPath.substringBeforeLast("/", "").ifBlank { "/" }
+                            val parent = sanitized.substringBeforeLast("/", "").ifBlank { "/" }
                             onNavigateFtp(parent)
                         }
                     },
@@ -107,7 +111,7 @@ fun NetworkTab(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = currentFtpPath,
+                        text = currentFtpPath.ifBlank { "/" },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -124,7 +128,15 @@ fun NetworkTab(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator()
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Menghubungkan ke ${browsingServer.type} (${browsingServer.host})...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             } else if (ftpErrorMessage != null) {
                 Box(
@@ -133,43 +145,76 @@ fun NetworkTab(
                         .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "Connection Failed",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = ftpErrorMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = { onNavigateFtp(currentFtpPath) }) {
-                            Text("Retry Connection")
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Gagal Memuat ${browsingServer.type}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = ftpErrorMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(onClick = onCloseFtp) {
+                                    Text("Tutup")
+                                }
+                                Button(onClick = { onNavigateFtp(currentFtpPath) }) {
+                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Coba Lagi")
+                                }
+                            }
                         }
                     }
                 }
             } else if (ftpFiles.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Folder is empty or no video media found.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Folder Kosong",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Tidak ditemukan file video di direktori ini.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("ftp_files_list"),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(ftpFiles) { file ->
+                    items(ftpFiles, key = { it.path }) { file ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -180,9 +225,11 @@ fun NetworkTab(
                                         onPlayFtpFile(browsingServer, file)
                                     }
                                 },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                containerColor = if (file.isDirectory)
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
                             )
                         ) {
                             Row(
@@ -193,7 +240,7 @@ fun NetworkTab(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size(40.dp)
                                         .clip(CircleShape)
                                         .background(
                                             if (file.isDirectory) MaterialTheme.colorScheme.primaryContainer
@@ -205,7 +252,7 @@ fun NetworkTab(
                                         imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.PlayArrow,
                                         contentDescription = null,
                                         tint = if (file.isDirectory) MaterialTheme.colorScheme.primary else Color.White,
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
@@ -256,7 +303,7 @@ fun NetworkTab(
                 ) {
                     Icon(imageVector = Icons.Default.Dns, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Server (FTP/SMB)")
+                    Text("Tambah Server")
                 }
 
                 OutlinedButton(
@@ -266,15 +313,15 @@ fun NetworkTab(
                 ) {
                     Icon(imageVector = Icons.Default.Link, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Direct URL Stream")
+                    Text("Input URL Stream")
                 }
             }
         }
 
-        // Servers Section
+        // Servers Section (FTP & Samba)
         item {
             Text(
-                text = "Configured Network Servers (FTP / Samba)",
+                text = "Server Jaringan (FTP / Samba SMB)",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -290,7 +337,7 @@ fun NetworkTab(
                     )
                 ) {
                     Text(
-                        text = "No FTP or Samba servers added. Tap 'Add Server' to stream videos over your local Wi-Fi or remote server.",
+                        text = "Belum ada server FTP / Samba. Ketuk 'Tambah Server' untuk streaming langsung lewat Wi-Fi / LAN.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(16.dp)
@@ -357,14 +404,34 @@ fun NetworkTab(
             }
         }
 
-        // Bookmarks / URL Streams Section
+        // Bookmarks / Preset Sample URL Streams Section
         item {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Saved Video Streams (HLS, RTSP, MP4)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sample Uji Coba & URL Stream",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                ElevatedButton(
+                    onClick = onLoadPresetSamples,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Reset Sample", fontSize = 12.sp)
+                }
+            }
         }
 
         if (bookmarks.isEmpty()) {
@@ -376,12 +443,20 @@ fun NetworkTab(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                     )
                 ) {
-                    Text(
-                        text = "No saved stream links. Tap 'Direct URL Stream' to play .m3u8, RTSP, or web videos.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Belum ada URL video. Tekan tombol di bawah untuk memuat sample uji coba (HLS .m3u8, MP4 1080p, dll).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(onClick = onLoadPresetSamples) {
+                            Text("⚡ Muat Sample Uji Coba URL")
+                        }
+                    }
                 }
             }
         } else {
