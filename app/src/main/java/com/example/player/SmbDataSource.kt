@@ -26,9 +26,20 @@ class SmbDataSource(
         uri = dataSpec.uri
         transferInitializing(dataSpec)
 
-        val uriString = dataSpec.uri.toString()
-        val context = cifsContext ?: createDefaultCifsContext(dataSpec.uri)
-        val smb = SmbFile(uriString, context)
+        val rawUri = dataSpec.uri
+        val context = cifsContext ?: createDefaultCifsContext(rawUri)
+
+        val cleanUrl = if (rawUri.userInfo != null) {
+            val scheme = rawUri.scheme ?: "smb"
+            val host = rawUri.host ?: ""
+            val port = if (rawUri.port > 0) ":${rawUri.port}" else ""
+            val path = rawUri.path ?: ""
+            "$scheme://$host$port$path"
+        } else {
+            rawUri.toString()
+        }
+
+        val smb = SmbFile(cleanUrl, context)
         smbFile = smb
 
         val totalLength = try { smb.length() } catch (_: Exception) { C.LENGTH_UNSET.toLong() }

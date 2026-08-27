@@ -87,10 +87,6 @@ class MediaPlayerManager(private val context: Context) {
 
     private fun createExtractorsFactory(): DefaultExtractorsFactory {
         return DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
-            .setMatroskaExtractorFlags(
-                MatroskaExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA
-            )
     }
 
     @Synchronized
@@ -103,16 +99,15 @@ class MediaPlayerManager(private val context: Context) {
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
-        // Instant start & seamless scrubbing load control for local files and smooth streaming
+        // Balanced load control for high-res x264/x265 MKV playback without buffering stalls
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                1500,  // min buffer 1.5s
-                15000, // max buffer 15s
-                500,   // buffer for playback 0.5s (instant start!)
-                1000   // buffer for rebuffering 1s (instant seeking!)
+                2500,  // min buffer 2.5s
+                30000, // max buffer 30s
+                1000,  // buffer for playback 1s
+                2000   // buffer for rebuffering 2s
             )
-            .setPrioritizeTimeOverSizeThresholds(false)
-            .setBackBuffer(5000, false)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -232,35 +227,14 @@ class MediaPlayerManager(private val context: Context) {
                         it.name.contains("software", ignoreCase = true)
                     }
                     val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
-                    // Prioritize SW decoders first, but keep HW decoders as seamless fallback for 10-bit HEVC / unsupported SW profiles
-                    swDecoders + hwDecoders
+                    if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
                 }
                 rf.setMediaCodecSelector(swCodecSelector)
                 rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             }
-            DecoderMode.HW -> {
-                val hwCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-                    val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
-                    val hwDecoders = decoders.filterNot {
-                        it.name.startsWith("c2.android.") ||
-                        it.name.startsWith("OMX.google.") ||
-                        it.name.contains("sw", ignoreCase = true) ||
-                        it.name.contains("software", ignoreCase = true)
-                    }
-                    val swDecoders = decoders.filter {
-                        it.name.startsWith("c2.android.") ||
-                        it.name.startsWith("OMX.google.") ||
-                        it.name.contains("sw", ignoreCase = true) ||
-                        it.name.contains("software", ignoreCase = true)
-                    }
-                    hwDecoders + swDecoders
-                }
-                rf.setMediaCodecSelector(hwCodecSelector)
-                rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            }
-            DecoderMode.HW_PLUS -> {
+            DecoderMode.HW, DecoderMode.HW_PLUS -> {
                 rf.setMediaCodecSelector(MediaCodecSelector.DEFAULT)
-                rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+                rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             }
         }
         return rf

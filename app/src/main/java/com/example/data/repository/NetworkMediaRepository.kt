@@ -238,12 +238,16 @@ class NetworkMediaRepository(
         try {
             val cifsContext = getCifsContext(server)
 
-            val sanitizedPath = remotePath.trim().removePrefix("/")
-            val smbUrl = if (sanitizedPath.isBlank()) {
-                "smb://${server.host}/"
+            val smbUrl = if (remotePath.startsWith("smb://", ignoreCase = true)) {
+                if (remotePath.endsWith("/")) remotePath else "$remotePath/"
             } else {
-                val pathWithSlash = if (sanitizedPath.endsWith("/")) sanitizedPath else "$sanitizedPath/"
-                "smb://${server.host}/$pathWithSlash"
+                val cleanPath = remotePath.trim().removePrefix("/")
+                if (cleanPath.isBlank()) {
+                    "smb://${server.host}/"
+                } else {
+                    val pathWithSlash = if (cleanPath.endsWith("/")) cleanPath else "$cleanPath/"
+                    "smb://${server.host}/$pathWithSlash"
+                }
             }
 
             val smbDir = SmbFile(smbUrl, cifsContext)
@@ -251,6 +255,8 @@ class NetworkMediaRepository(
 
             val files = smbDir.listFiles() ?: emptyArray()
             val resultList = mutableListOf<NetworkFileItem>()
+
+            val hostPrefix = "smb://${server.host}/"
 
             for (file in files) {
                 try {
@@ -260,20 +266,26 @@ class NetworkMediaRepository(
                     val isVideo = isSupportedVideoExtension(name)
 
                     if (isDir || isVideo) {
+                        val filePathString = file.path
+                        val relPath = if (filePathString.startsWith(hostPrefix, ignoreCase = true)) {
+                            filePathString.substring(hostPrefix.length)
+                        } else {
+                            filePathString.substringAfter("smb://", filePathString)
+                                .substringAfter("/", filePathString)
+                        }
+
+                        val cleanRelPath = if (isDir && !relPath.endsWith("/")) "$relPath/" else relPath
+
                         val authPart = if (!server.isAnonymous && server.username.isNotBlank()) {
                             "${server.username}:${server.password}@"
                         } else ""
 
-                        val streamUrl = if (isDir) {
-                            file.url.toString()
-                        } else {
-                            "smb://${authPart}${server.host}/${sanitizedPath}${name}"
-                        }
+                        val streamUrl = "smb://${authPart}${server.host}/${cleanRelPath.removePrefix("/")}"
 
                         resultList.add(
                             NetworkFileItem(
                                 name = name,
-                                path = file.path,
+                                path = cleanRelPath,
                                 isDirectory = isDir,
                                 sizeBytes = if (isDir) 0L else (try { file.length() } catch (_: Exception) { 0L }),
                                 lastModified = try { file.lastModified() } catch (_: Exception) { 0L },
