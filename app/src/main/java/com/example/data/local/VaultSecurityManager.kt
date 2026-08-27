@@ -151,50 +151,16 @@ class VaultSecurityManager(private val context: Context) {
      * it automatically searches external persistent files and restores the PIN to DataStore.
      */
     suspend fun getOrRestorePin(): String? = withContext(Dispatchers.IO) {
-        // 1. Check DataStore first
-        var pin: String? = null
         try {
-            pin = context.dataStore.data.first()[UserPreferencesManager.KEY_PIN_CODE]
+            context.dataStore.data.first()[UserPreferencesManager.KEY_PIN_CODE]
         } catch (e: Exception) {
             Log.w(TAG, "DataStore read error: ${e.message}")
+            null
         }
-
-        if (!pin.isNullOrBlank()) {
-            // Ensure external files are also in sync
-            syncToExternalFiles(pin)
-            return@withContext pin
-        }
-
-        // 2. DataStore has no PIN (could be fresh install or user tapped 'Hapus Data Aplikasi')
-        // Check external persistent storage
-        for (file in getPersistentKeyFiles()) {
-            if (file.exists() && file.canRead()) {
-                try {
-                    val content = file.readText(StandardCharsets.UTF_8).trim()
-                    val recoveredPin = decryptPayload(content)
-                    if (!recoveredPin.isNullOrBlank()) {
-                        Log.i(TAG, "Successfully restored PIN from persistent backup: ${file.absolutePath}")
-                        // Restore into DataStore
-                        savePinToDataStore(recoveredPin)
-                        // Sync to any missing backup locations
-                        syncToExternalFiles(recoveredPin)
-                        return@withContext recoveredPin
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not read backup file ${file.name}: ${e.message}")
-                }
-            }
-        }
-
-        return@withContext null
     }
 
-    /**
-     * Saves the new PIN to DataStore and all external persistent locations.
-     */
     suspend fun savePin(newPin: String) = withContext(Dispatchers.IO) {
         savePinToDataStore(newPin)
-        syncToExternalFiles(newPin)
     }
 
     /**

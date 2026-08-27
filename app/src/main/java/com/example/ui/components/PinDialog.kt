@@ -26,12 +26,14 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,8 +67,10 @@ enum class PinDialogMode {
 fun PinDialog(
     isSettingNewPin: Boolean,
     hasExistingPin: Boolean = false,
+    initialVaultExtension: String = "1ca",
     onVerifyPin: (suspend (String) -> Boolean)? = null,
     onPinSuccess: (String) -> Unit,
+    onPinAndExtensionSuccess: ((String, String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onRemovePin: (() -> Unit)? = null
 ) {
@@ -81,11 +85,9 @@ fun PinDialog(
         }
     }
 
-    // Step in workflow:
-    // For UNLOCK: 0 (Enter PIN)
-    // For SETUP_NEW: 0 (Enter New PIN), 1 (Confirm New PIN)
-    // For CHANGE_PIN: 0 (Verify Old PIN), 1 (Enter New PIN), 2 (Confirm New PIN)
     var step by remember { mutableIntStateOf(0) }
+    var showExtensionStep by remember { mutableStateOf(false) }
+    var customExtInput by remember { mutableStateOf(initialVaultExtension) }
 
     var oldPinInput by remember { mutableStateOf("") }
     var newPinInput by remember { mutableStateOf("") }
@@ -185,11 +187,7 @@ fun PinDialog(
                                 confirmPinInput = next
                                 if (next.length == 4) {
                                     if (next == newPinInput) {
-                                        isSuccess = true
-                                        coroutineScope.launch {
-                                            delay(300)
-                                            onPinSuccess(next)
-                                        }
+                                        showExtensionStep = true
                                     } else {
                                         errorMessage = "PIN konfirmasi tidak cocok! Silakan ulangi."
                                         confirmPinInput = ""
@@ -234,11 +232,7 @@ fun PinDialog(
                                     confirmPinInput = next
                                     if (next.length == 4) {
                                         if (next == newPinInput) {
-                                            isSuccess = true
-                                            coroutineScope.launch {
-                                                delay(300)
-                                                onPinSuccess(next)
-                                            }
+                                            showExtensionStep = true
                                         } else {
                                             errorMessage = "PIN konfirmasi tidak cocok! Silakan ulangi."
                                             confirmPinInput = ""
@@ -323,7 +317,9 @@ fun PinDialog(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // Title & Instructions
-                val title = when (mode) {
+                val title = if (showExtensionStep) {
+                    "Ekstensi Enkripsi Video"
+                } else when (mode) {
                     PinDialogMode.UNLOCK -> "Mode Kunci (.1ca Vault)"
                     PinDialogMode.SETUP_NEW -> if (step == 0) "Buat 4-Digit PIN Keamanan" else "Konfirmasi PIN Baru"
                     PinDialogMode.CHANGE_PIN -> when (step) {
@@ -333,7 +329,9 @@ fun PinDialog(
                     }
                 }
 
-                val subtitle = when (mode) {
+                val subtitle = if (showExtensionStep) {
+                    "Masukkan ekstensi file video terenkripsi (contoh: 1ca, enc, sec). Ekstensi ini digunakan saat membaca file di folder lokal & jaringan Samba."
+                } else when (mode) {
                     PinDialogMode.UNLOCK -> "Masukkan 4-digit PIN untuk membuka video rahasia (.1ca)"
                     PinDialogMode.SETUP_NEW -> if (step == 0) "PIN akan disimpan permanen & melindungi video .1ca" else "Ketik ulang PIN yang sama untuk verifikasi"
                     PinDialogMode.CHANGE_PIN -> when (step) {
@@ -362,12 +360,56 @@ fun PinDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // PIN indicator dots / numbers
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    for (i in 0 until 4) {
+                if (showExtensionStep) {
+                    // Extension input view
+                    OutlinedTextField(
+                        value = customExtInput,
+                        onValueChange = { customExtInput = it },
+                        label = { Text("Ekstensi Video (default: 1ca)") },
+                        placeholder = { Text("contoh: 1ca") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .testTag("custom_extension_input"),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text("Batal")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                isSuccess = true
+                                coroutineScope.launch {
+                                    delay(200)
+                                    val cleanExt = customExtInput.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
+                                    if (onPinAndExtensionSuccess != null) {
+                                        onPinAndExtensionSuccess(newPinInput, cleanExt)
+                                    } else {
+                                        onPinSuccess(newPinInput)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag("save_pin_extension_button")
+                        ) {
+                            Text("Simpan PIN & Ekstensi")
+                        }
+                    }
+                } else {
+                    // PIN indicator dots / numbers
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        for (i in 0 until 4) {
                         val isFilled = i < currentInput.length
                         val digitChar = if (isFilled && showDigits) currentInput[i].toString() else null
 
@@ -485,6 +527,7 @@ fun PinDialog(
                                     }
                                 }
                             }
+                        }
                         }
                     }
                 }

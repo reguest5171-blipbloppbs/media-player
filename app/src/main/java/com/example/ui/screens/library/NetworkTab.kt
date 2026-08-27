@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Refresh
@@ -68,6 +70,8 @@ fun NetworkTab(
     ftpFiles: List<NetworkFileItem>,
     isFtpLoading: Boolean,
     ftpErrorMessage: String?,
+    isLockUnlocked: Boolean = false,
+    onLockClick: () -> Unit = {},
     onOpenServer: (NetworkServerEntity) -> Unit,
     onNavigateFtp: (String) -> Unit,
     onCloseFtp: () -> Unit,
@@ -116,6 +120,16 @@ fun NetworkTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+                IconButton(
+                    onClick = onLockClick,
+                    modifier = Modifier.testTag("smb_lock_button")
+                ) {
+                    Icon(
+                        imageVector = if (isLockUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                        contentDescription = "Lock Mode",
+                        tint = if (isLockUnlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 IconButton(onClick = onCloseFtp) {

@@ -29,9 +29,14 @@ import com.example.data.model.AspectRatioMode
 import com.example.data.model.DecoderMode
 import com.example.data.model.StreamType
 import com.example.data.model.VideoMediaItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -65,6 +70,7 @@ data class PlayerState(
 @OptIn(UnstableApi::class)
 class MediaPlayerManager(private val context: Context) {
 
+    private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var exoPlayer: ExoPlayer? = null
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
@@ -141,6 +147,23 @@ class MediaPlayerManager(private val context: Context) {
                     isLoading = isLoading,
                     durationMs = duration
                 )
+
+                // Watchdog: If HW HEVC decoder stalls in STATE_BUFFERING for > 2.5s, auto switch to SW decoder
+                if (playbackState == Player.STATE_BUFFERING && player.playWhenReady && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
+                    val mediaWhenBufferingStarted = currentMediaItem
+                    coroutineScope.launch {
+                        delay(2500L)
+                        if (exoPlayer?.playbackState == Player.STATE_BUFFERING &&
+                            exoPlayer?.playWhenReady == true &&
+                            currentMediaItem == mediaWhenBufferingStarted &&
+                            activeDecoderMode != DecoderMode.SW &&
+                            !fallbackAttempted
+                        ) {
+                            fallbackAttempted = true
+                            switchToDecoder(DecoderMode.SW)
+                        }
+                    }
+                }
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -270,10 +293,7 @@ class MediaPlayerManager(private val context: Context) {
 
         if (media.isEncrypted1ca || media.streamType == StreamType.VAULT_1CA) {
             val encFactory = EncryptionUtil.getDecryptedStreamDataSourceFactory()
-            val mediaItem = MediaItem.Builder()
-                .setUri(media.uri)
-                .setMimeType(MimeTypes.VIDEO_MP4)
-                .build()
+            val mediaItem = MediaItem.fromUri(media.uri)
             return ProgressiveMediaSource.Factory(encFactory, extractorsFactory).createMediaSource(mediaItem)
         }
 

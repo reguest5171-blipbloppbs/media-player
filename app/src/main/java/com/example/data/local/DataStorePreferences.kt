@@ -17,6 +17,7 @@ class UserPreferencesManager(private val context: Context) {
 
     companion object {
         val KEY_PIN_CODE = stringPreferencesKey("pin_code")
+        val KEY_VAULT_EXTENSION = stringPreferencesKey("vault_file_extension")
         val KEY_DEFAULT_DECODER = stringPreferencesKey("default_decoder")
         val KEY_DEFAULT_ASPECT = stringPreferencesKey("default_aspect")
         val KEY_AUTO_SCAN = booleanPreferencesKey("auto_scan_startup")
@@ -33,6 +34,10 @@ class UserPreferencesManager(private val context: Context) {
 
     val pinCodeFlow: Flow<String?> = context.dataStore.data.map { preferences ->
         preferences[KEY_PIN_CODE]
+    }
+
+    val vaultExtensionFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_VAULT_EXTENSION] ?: "1ca"
     }
 
     val defaultDecoderFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -73,6 +78,13 @@ class UserPreferencesManager(private val context: Context) {
 
     suspend fun setPinCode(pin: String) {
         vaultSecurityManager.savePin(pin)
+    }
+
+    suspend fun setVaultExtension(extension: String) {
+        val cleanExt = extension.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
+        context.dataStore.edit { preferences ->
+            preferences[KEY_VAULT_EXTENSION] = cleanExt
+        }
     }
 
     suspend fun clearPinCode() {

@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +40,8 @@ fun FoldersTab(
     selectedFolder: VideoFolder?,
     videosInSelectedFolder: List<VideoMediaItem>,
     viewMode: ViewMode,
+    isLockUnlocked: Boolean = false,
+    onLockClick: () -> Unit = {},
     onFolderClick: (VideoFolder) -> Unit,
     onBackFromFolder: () -> Unit,
     onVideoClick: (VideoMediaItem) -> Unit,
@@ -72,6 +76,16 @@ fun FoldersTab(
                         text = "${videosInSelectedFolder.size} videos in ${selectedFolder.path}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(
+                    onClick = onLockClick,
+                    modifier = Modifier.testTag("folder_lock_button")
+                ) {
+                    Icon(
+                        imageVector = if (isLockUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                        contentDescription = "Lock Mode",
+                        tint = if (isLockUnlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

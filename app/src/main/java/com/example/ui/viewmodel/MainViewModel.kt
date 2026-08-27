@@ -32,6 +32,7 @@ data class MainUiState(
     val viewMode: ViewMode = ViewMode.GRID,
     val isLockModeUnlocked: Boolean = false,
     val hasPinConfigured: Boolean = false,
+    val vaultExtension: String = "1ca",
     val activeTab: Int = 0, // 0: All, 1: Folders, 2: Network, 3: Vault
     val selectedFolder: VideoFolder? = null,
     val ftpBrowsingServer: NetworkServerEntity? = null,
@@ -128,10 +129,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadPreferencesAndScan() {
         viewModelScope.launch {
-            // Restore PIN from persistent external storage if app data was cleared
             val pin = preferencesManager.vaultSecurityManager.getOrRestorePin()
+            val ext = preferencesManager.vaultExtensionFlow.first()
             _uiState.value = _uiState.value.copy(
-                hasPinConfigured = !pin.isNullOrBlank()
+                hasPinConfigured = !pin.isNullOrBlank(),
+                vaultExtension = ext.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
             )
 
             val autoScan = preferencesManager.autoScanFlow.first()
@@ -159,11 +161,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isScanning = true)
             try {
-                // Also ensure PIN is refreshed/restored if needed
                 val currentPin = preferencesManager.vaultSecurityManager.getOrRestorePin()
-                _uiState.value = _uiState.value.copy(hasPinConfigured = !currentPin.isNullOrBlank())
+                val ext = preferencesManager.vaultExtensionFlow.first()
+                _uiState.value = _uiState.value.copy(
+                    hasPinConfigured = !currentPin.isNullOrBlank(),
+                    vaultExtension = ext.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
+                )
 
-                val videos = mediaRepository.scanLocalVideos(includeVault1ca = true)
+                val videos = mediaRepository.scanLocalVideos(
+                    customEncryptedExt = _uiState.value.vaultExtension,
+                    includeVault1ca = true
+                )
                 _rawVideos.value = videos
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -214,6 +222,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isLockModeUnlocked = true,
                     hasPinConfigured = true
                 )
+                refreshCurrentViewAfterLockChange()
             }
         }
         return correct
@@ -226,18 +235,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLockModeUnlocked = true,
                 hasPinConfigured = true
             )
+            refreshCurrentViewAfterLockChange()
         }
         return isMatch
     }
 
     fun configurePin(newPin: String) {
+        configurePinAndExtension(newPin, _uiState.value.vaultExtension)
+    }
+
+    fun configurePinAndExtension(newPin: String, customExtension: String) {
         viewModelScope.launch {
+            val cleanExt = customExtension.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
             preferencesManager.setPinCode(newPin)
+            preferencesManager.setVaultExtension(cleanExt)
             _uiState.value = _uiState.value.copy(
                 hasPinConfigured = true,
                 isLockModeUnlocked = true,
-                messageSnackbar = "PIN Keamanan berhasil disimpan permanen!"
+                vaultExtension = cleanExt,
+                messageSnackbar = "PIN & Ekstensi .$cleanExt berhasil disimpan!"
             )
+            refreshCurrentViewAfterLockChange()
         }
     }
 
@@ -249,11 +267,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLockModeUnlocked = false,
                 messageSnackbar = "PIN Keamanan berhasil dihapus"
             )
+            refreshCurrentViewAfterLockChange()
         }
     }
 
     fun lockVault() {
         _uiState.value = _uiState.value.copy(isLockModeUnlocked = false)
+        refreshCurrentViewAfterLockChange()
+    }
+
+    fun toggleLockMode() {
+        if (_uiState.value.isLockModeUnlocked) {
+            lockVault()
+        }
+    }
+
+    private fun refreshCurrentViewAfterLockChange() {
+        val server = _uiState.value.ftpBrowsingServer
+        if (server != null) {
+            fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
+        } else {
+            scanMedia()
+        }
     }
 
     // File Operations
@@ -335,7 +370,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun fetchFtpFiles(server: NetworkServerEntity, path: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(ftpLoading = true, ftpErrorMessage = null)
-            val result = networkRepository.listNetworkFiles(server, path)
+            val result = networkRepository.listNetworkFiles(
+                server = server,
+                remotePath = path,
+                customEncryptedExt = _uiState.value.vaultExtension,
+                includeEncrypted = _uiState.value.isLockModeUnlocked
+            )
             result.onSuccess { files ->
                 _uiState.value = _uiState.value.copy(
                     ftpFiles = files,

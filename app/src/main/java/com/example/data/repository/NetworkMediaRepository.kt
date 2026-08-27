@@ -117,15 +117,17 @@ class NetworkMediaRepository(
 
     suspend fun listNetworkFiles(
         server: NetworkServerEntity,
-        remotePath: String
+        remotePath: String,
+        customEncryptedExt: String = "1ca",
+        includeEncrypted: Boolean = true
     ): Result<List<NetworkFileItem>> = withContext(Dispatchers.IO) {
         try {
             // Strict 7 seconds timeout so the app NEVER hangs on unreachable server
             withTimeout(7000L) {
                 if (server.type.equals("SMB", ignoreCase = true)) {
-                    listSmbFilesInternal(server, remotePath)
+                    listSmbFilesInternal(server, remotePath, customEncryptedExt, includeEncrypted)
                 } else {
-                    listFtpFilesInternal(server, remotePath)
+                    listFtpFilesInternal(server, remotePath, customEncryptedExt, includeEncrypted)
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -137,7 +139,9 @@ class NetworkMediaRepository(
 
     private fun listFtpFilesInternal(
         server: NetworkServerEntity,
-        remotePath: String
+        remotePath: String,
+        customEncryptedExt: String,
+        includeEncrypted: Boolean
     ): Result<List<NetworkFileItem>> {
         val ftp = FTPClient()
         try {
@@ -168,7 +172,7 @@ class NetworkMediaRepository(
             for (file in ftpFiles) {
                 if (file.name == "." || file.name == "..") continue
                 val isDir = file.isDirectory
-                val isVideo = isSupportedVideoExtension(file.name)
+                val isVideo = isSupportedVideoExtension(file.name, customEncryptedExt, includeEncrypted)
 
                 if (isDir || isVideo) {
                     val fullPath = if (workingPath.endsWith("/")) "${workingPath}${file.name}" else "${workingPath}/${file.name}"
@@ -233,7 +237,9 @@ class NetworkMediaRepository(
 
     private fun listSmbFilesInternal(
         server: NetworkServerEntity,
-        remotePath: String
+        remotePath: String,
+        customEncryptedExt: String,
+        includeEncrypted: Boolean
     ): Result<List<NetworkFileItem>> {
         try {
             val cifsContext = getCifsContext(server)
@@ -263,7 +269,7 @@ class NetworkMediaRepository(
                     val name = file.name.removeSuffix("/")
                     if (name.isBlank() || name == "." || name == "..") continue
                     val isDir = file.isDirectory
-                    val isVideo = isSupportedVideoExtension(name)
+                    val isVideo = isSupportedVideoExtension(name, customEncryptedExt, includeEncrypted)
 
                     if (isDir || isVideo) {
                         val filePathString = file.path
@@ -302,8 +308,16 @@ class NetworkMediaRepository(
         }
     }
 
-    fun buildNetworkVideoItem(item: NetworkFileItem, serverName: String, serverType: String = "FTP"): VideoMediaItem {
-        val is1ca = item.name.endsWith(".1ca", ignoreCase = true)
+    fun buildNetworkVideoItem(
+        item: NetworkFileItem,
+        serverName: String,
+        serverType: String = "FTP",
+        customEncryptedExt: String = "1ca"
+    ): VideoMediaItem {
+        val cleanCustom = customEncryptedExt.trim().removePrefix(".").lowercase()
+        val isEncrypted = item.name.endsWith(".1ca", ignoreCase = true) ||
+                (cleanCustom.isNotBlank() && item.name.endsWith(".$cleanCustom", ignoreCase = true))
+
         val sType = if (serverType.equals("SMB", ignoreCase = true)) StreamType.SMB else StreamType.FTP
         return VideoMediaItem(
             id = item.streamUri.hashCode().toLong(),
@@ -314,10 +328,10 @@ class NetworkMediaRepository(
             durationMs = 0L,
             sizeBytes = item.sizeBytes,
             dateModified = item.lastModified,
-            mimeType = if (is1ca) "application/octet-stream" else "video/*",
+            mimeType = if (isEncrypted) "application/octet-stream" else "video/*",
             folderPath = serverName,
             folderName = serverName,
-            isEncrypted1ca = is1ca,
+            isEncrypted1ca = isEncrypted,
             streamType = sType
         )
     }
@@ -342,11 +356,24 @@ class NetworkMediaRepository(
         )
     }
 
-    private fun isSupportedVideoExtension(fileName: String): Boolean {
-        val extensions = listOf(
+    private fun isSupportedVideoExtension(
+        fileName: String,
+        customEncryptedExt: String = "1ca",
+        includeEncrypted: Boolean = true
+    ): Boolean {
+        val baseExtensions = listOf(
             ".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm", ".ts",
-            ".m3u8", ".3gp", ".vob", ".wmv", ".m4v", ".f4v", ".1ca"
+            ".m3u8", ".3gp", ".vob", ".wmv", ".m4v", ".f4v"
         )
-        return extensions.any { fileName.endsWith(it, ignoreCase = true) }
+        if (baseExtensions.any { fileName.endsWith(it, ignoreCase = true) }) {
+            return true
+        }
+
+        if (!includeEncrypted) return false
+
+        val cleanCustom = customEncryptedExt.trim().removePrefix(".").lowercase()
+        val customExt = if (cleanCustom.isNotBlank()) ".$cleanCustom" else ".1ca"
+
+        return fileName.endsWith(".1ca", ignoreCase = true) || fileName.endsWith(customExt, ignoreCase = true)
     }
 }

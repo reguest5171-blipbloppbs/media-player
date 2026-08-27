@@ -55,9 +55,11 @@ class MediaRepository(
 
     suspend fun clearHistory() = dao.clearAllHistory()
 
-    suspend fun scanLocalVideos(includeVault1ca: Boolean = false): List<VideoMediaItem> = withContext(Dispatchers.IO) {
+    suspend fun scanLocalVideos(customEncryptedExt: String = "1ca", includeVault1ca: Boolean = false): List<VideoMediaItem> = withContext(Dispatchers.IO) {
         val videoList = mutableListOf<VideoMediaItem>()
         val seenPaths = HashSet<String>()
+
+        val cleanCustom = customEncryptedExt.trim().removePrefix(".").lowercase()
 
         // 1. Scan MediaStore
         try {
@@ -118,7 +120,8 @@ class MediaRepository(
                     val folderPath = parentFile?.absolutePath ?: "Storage"
                     val folderName = parentFile?.name ?: "Storage"
 
-                    val is1ca = displayName.endsWith(".1ca", ignoreCase = true) || path.endsWith(".1ca", ignoreCase = true)
+                    val is1ca = displayName.endsWith(".1ca", ignoreCase = true) || path.endsWith(".1ca", ignoreCase = true) ||
+                            (cleanCustom.isNotBlank() && (displayName.endsWith(".$cleanCustom", ignoreCase = true) || path.endsWith(".$cleanCustom", ignoreCase = true)))
 
                     if (!is1ca || includeVault1ca) {
                         if (path.isNotBlank()) seenPaths.add(path)
@@ -162,7 +165,7 @@ class MediaRepository(
 
         for (dir in commonDirs) {
             if (dir.exists() && dir.isDirectory) {
-                scanDirectoryRecursively(dir, videoList, seenPaths, includeVault1ca, depth = 0)
+                scanDirectoryRecursively(dir, videoList, seenPaths, cleanCustom, includeVault1ca, depth = 0)
             }
         }
 
@@ -173,6 +176,7 @@ class MediaRepository(
         directory: File,
         results: MutableList<VideoMediaItem>,
         seenPaths: MutableSet<String>,
+        cleanCustomExt: String,
         includeVault1ca: Boolean,
         depth: Int
     ) {
@@ -181,10 +185,11 @@ class MediaRepository(
 
         for (file in files) {
             if (file.isDirectory && !file.name.startsWith(".")) {
-                scanDirectoryRecursively(file, results, seenPaths, includeVault1ca, depth + 1)
+                scanDirectoryRecursively(file, results, seenPaths, cleanCustomExt, includeVault1ca, depth + 1)
             } else if (file.isFile) {
                 val name = file.name
-                val is1ca = name.endsWith(".1ca", ignoreCase = true)
+                val is1ca = name.endsWith(".1ca", ignoreCase = true) ||
+                        (cleanCustomExt.isNotBlank() && name.endsWith(".$cleanCustomExt", ignoreCase = true))
                 val isVideo = isSupportedVideoFile(name)
 
                 if ((isVideo || is1ca) && !seenPaths.contains(file.absolutePath)) {

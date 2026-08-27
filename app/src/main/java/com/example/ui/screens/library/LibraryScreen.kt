@@ -334,6 +334,15 @@ fun LibraryScreen(
                         selectedFolder = uiState.selectedFolder,
                         videosInSelectedFolder = videosInFolder,
                         viewMode = uiState.viewMode,
+                        isLockUnlocked = uiState.isLockModeUnlocked,
+                        onLockClick = {
+                            if (uiState.isLockModeUnlocked) {
+                                viewModel.lockVault()
+                            } else {
+                                isPinSetupMode = !uiState.hasPinConfigured
+                                showPinDialog = true
+                            }
+                        },
                         onFolderClick = { folder -> viewModel.selectFolder(folder) },
                         onBackFromFolder = { viewModel.selectFolder(null) },
                         onVideoClick = { video -> onPlayVideo(video, videosInFolder) },
@@ -356,6 +365,15 @@ fun LibraryScreen(
                         ftpFiles = uiState.ftpFiles,
                         isFtpLoading = uiState.ftpLoading,
                         ftpErrorMessage = uiState.ftpErrorMessage,
+                        isLockUnlocked = uiState.isLockModeUnlocked,
+                        onLockClick = {
+                            if (uiState.isLockModeUnlocked) {
+                                viewModel.lockVault()
+                            } else {
+                                isPinSetupMode = !uiState.hasPinConfigured
+                                showPinDialog = true
+                            }
+                        },
                         onOpenServer = { server -> viewModel.openFtpServer(server) },
                         onNavigateFtp = { path -> viewModel.navigateFtp(path) },
                         onCloseFtp = { viewModel.closeFtpBrowser() },
@@ -418,7 +436,16 @@ fun LibraryScreen(
         PinDialog(
             isSettingNewPin = isPinSetupMode,
             hasExistingPin = uiState.hasPinConfigured,
+            initialVaultExtension = uiState.vaultExtension,
             onVerifyPin = { pin -> viewModel.checkPinMatches(pin) },
+            onPinAndExtensionSuccess = { pin, ext ->
+                showPinDialog = false
+                if (isPinSetupMode) {
+                    viewModel.configurePinAndExtension(pin, ext)
+                } else {
+                    viewModel.verifyPin(pin)
+                }
+            },
             onPinSuccess = { pin ->
                 showPinDialog = false
                 if (isPinSetupMode) {
