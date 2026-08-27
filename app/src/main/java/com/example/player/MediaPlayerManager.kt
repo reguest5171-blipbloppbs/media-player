@@ -237,29 +237,43 @@ class MediaPlayerManager(private val context: Context) {
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
         val rf = DefaultRenderersFactory(context)
-        // Enable decoder fallback so ExoPlayer automatically falls back to secondary/software codec if primary fails
         rf.setEnableDecoderFallback(true)
+        rf.setAllowedVideoJoiningTimeMs(5000)
 
-        when (decoderMode) {
-            DecoderMode.SW -> {
-                val swCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-                    val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+        val nextPlayerMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+            val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+            val isHevc = mimeType.equals(MimeTypes.VIDEO_H265, ignoreCase = true) || mimeType.equals("video/hevc", ignoreCase = true)
+
+            when (decoderMode) {
+                DecoderMode.SW -> {
                     val swDecoders = decoders.filter {
                         it.name.startsWith("c2.android.") ||
                         it.name.startsWith("OMX.google.") ||
                         it.name.contains("sw", ignoreCase = true) ||
-                        it.name.contains("software", ignoreCase = true)
+                        it.name.contains("software", ignoreCase = true) ||
+                        (isHevc && !it.hardwareAccelerated)
                     }
                     val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
                     if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
                 }
-                rf.setMediaCodecSelector(swCodecSelector)
-                rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                DecoderMode.HW, DecoderMode.HW_PLUS -> {
+                    if (isHevc) {
+                        // Next Player HEVC Strategy: Prioritize hardware decoders, with seamless fallback to C2/OMX HEVC SW decoders
+                        val hwDecoders = decoders.filter { it.hardwareAccelerated }
+                        val swDecoders = decoders.filterNot { it.hardwareAccelerated }
+                        if (hwDecoders.isNotEmpty()) hwDecoders + swDecoders else decoders
+                    } else {
+                        decoders
+                    }
+                }
             }
-            DecoderMode.HW, DecoderMode.HW_PLUS -> {
-                rf.setMediaCodecSelector(MediaCodecSelector.DEFAULT)
-                rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-            }
+        }
+
+        rf.setMediaCodecSelector(nextPlayerMediaCodecSelector)
+
+        when (decoderMode) {
+            DecoderMode.SW -> rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            DecoderMode.HW, DecoderMode.HW_PLUS -> rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         }
         return rf
     }
