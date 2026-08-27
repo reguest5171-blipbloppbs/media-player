@@ -157,8 +157,11 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         onDispose {
             try {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 activity?.window?.let { win ->
+                    val lp = win.attributes
+                    lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    win.attributes = lp
                     val controller = WindowCompat.getInsetsController(win, win.decorView)
                     controller.show(WindowInsetsCompat.Type.systemBars())
                 }
@@ -202,6 +205,7 @@ fun PlayerScreen(
                             isLeftZone = offset.x < (size.width / 2f)
                             isVerticalDrag = false
                             isHorizontalDrag = false
+                            viewModel.resetVolumeAccumulator()
                         },
                         onDrag = { change, dragAmount ->
                             change.consume()

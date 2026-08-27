@@ -226,6 +226,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private var volumeAccumulator: Float = -1f
+
     // Gestures
     fun onBrightnessSwipe(delta: Float, activity: Activity) {
         try {
@@ -249,14 +251,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun onVolumeSwipe(delta: Float) {
         try {
             val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            if (maxVolume <= 0) return
             val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            val change = (delta * maxVolume).toInt()
-            val newVol = (currentVolume + change).coerceIn(0, maxVolume)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
 
-            val percent = if (maxVolume > 0) (newVol * 100) / maxVolume else 0
+            if (volumeAccumulator < 0f) {
+                volumeAccumulator = currentVolume.toFloat()
+            }
+
+            volumeAccumulator = (volumeAccumulator + (delta * maxVolume)).coerceIn(0f, maxVolume.toFloat())
+            val newVol = kotlin.math.round(volumeAccumulator).toInt().coerceIn(0, maxVolume)
+
+            if (newVol != currentVolume) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVol, 0)
+            }
+
+            val percent = (newVol * 100) / maxVolume
             showGestureOverlay(GestureType.VOLUME, percent)
         } catch (_: Exception) {}
+    }
+
+    fun resetVolumeAccumulator() {
+        volumeAccumulator = -1f
     }
 
     fun onSeekSwipe(deltaMs: Long) {

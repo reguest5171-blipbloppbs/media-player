@@ -432,12 +432,20 @@ fun LibraryScreen(
         )
     }
 
+    val securityQuestion by viewModel.securityQuestion.collectAsStateWithLifecycle()
+
     if (showPinDialog) {
         PinDialog(
             isSettingNewPin = isPinSetupMode,
             hasExistingPin = uiState.hasPinConfigured,
             initialVaultExtension = uiState.vaultExtension,
+            savedSecurityQuestion = securityQuestion,
             onVerifyPin = { pin -> viewModel.checkPinMatches(pin) },
+            onVerifySecurityAnswer = { answer -> viewModel.verifySecurityAnswer(answer) },
+            onPinExtensionAndQuestionSuccess = { pin, ext, question, answer ->
+                showPinDialog = false
+                viewModel.configurePinAndExtensionWithQuestion(pin, ext, question, answer)
+            },
             onPinAndExtensionSuccess = { pin, ext ->
                 showPinDialog = false
                 if (isPinSetupMode) {
@@ -451,7 +459,7 @@ fun LibraryScreen(
                 if (isPinSetupMode) {
                     viewModel.configurePin(pin)
                 } else {
-                    viewModel.verifyPin(pin)
+                    if (pin.isNotBlank()) viewModel.verifyPin(pin)
                 }
             },
             onDismiss = { showPinDialog = false }

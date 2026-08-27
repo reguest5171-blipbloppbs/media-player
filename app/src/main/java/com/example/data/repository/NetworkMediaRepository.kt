@@ -177,7 +177,7 @@ class NetworkMediaRepository(
                 if (isDir || isVideo) {
                     val fullPath = if (workingPath.endsWith("/")) "${workingPath}${file.name}" else "${workingPath}/${file.name}"
                     val authPart = if (!server.isAnonymous && server.username.isNotBlank()) {
-                        "${server.username}:${server.password}@"
+                        "${Uri.encode(server.username)}:${Uri.encode(server.password)}@"
                     } else ""
                     val streamUrl = "ftp://${authPart}${server.host}:${server.port}${fullPath}"
 
@@ -283,7 +283,7 @@ class NetworkMediaRepository(
                         val cleanRelPath = if (isDir && !relPath.endsWith("/")) "$relPath/" else relPath
 
                         val authPart = if (!server.isAnonymous && server.username.isNotBlank()) {
-                            "${server.username}:${server.password}@"
+                            "${Uri.encode(server.username)}:${Uri.encode(server.password)}@"
                         } else ""
 
                         val streamUrl = "smb://${authPart}${server.host}/${cleanRelPath.removePrefix("/")}"
@@ -314,9 +314,11 @@ class NetworkMediaRepository(
         serverType: String = "FTP",
         customEncryptedExt: String = "1ca"
     ): VideoMediaItem {
-        val cleanCustom = customEncryptedExt.trim().removePrefix(".").lowercase()
+        val customExtList = customEncryptedExt.split(",")
+            .map { it.trim().removePrefix(".").lowercase() }
+            .filter { it.isNotBlank() }
         val isEncrypted = item.name.endsWith(".1ca", ignoreCase = true) ||
-                (cleanCustom.isNotBlank() && item.name.endsWith(".$cleanCustom", ignoreCase = true))
+                customExtList.any { ext -> item.name.endsWith(".$ext", ignoreCase = true) }
 
         val sType = if (serverType.equals("SMB", ignoreCase = true)) StreamType.SMB else StreamType.FTP
         return VideoMediaItem(
@@ -371,9 +373,10 @@ class NetworkMediaRepository(
 
         if (!includeEncrypted) return false
 
-        val cleanCustom = customEncryptedExt.trim().removePrefix(".").lowercase()
-        val customExt = if (cleanCustom.isNotBlank()) ".$cleanCustom" else ".1ca"
+        val customExtList = customEncryptedExt.split(",")
+            .map { it.trim().removePrefix(".").lowercase() }
+            .filter { it.isNotBlank() }
 
-        return fileName.endsWith(".1ca", ignoreCase = true) || fileName.endsWith(customExt, ignoreCase = true)
+        return fileName.endsWith(".1ca", ignoreCase = true) || customExtList.any { ext -> fileName.endsWith(".$ext", ignoreCase = true) }
     }
 }

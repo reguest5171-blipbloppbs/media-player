@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "media_player_settings")
@@ -17,6 +18,8 @@ class UserPreferencesManager(private val context: Context) {
 
     companion object {
         val KEY_PIN_CODE = stringPreferencesKey("pin_code")
+        val KEY_SECURITY_QUESTION = stringPreferencesKey("security_question")
+        val KEY_SECURITY_ANSWER = stringPreferencesKey("security_answer")
         val KEY_VAULT_EXTENSION = stringPreferencesKey("vault_file_extension")
         val KEY_DEFAULT_DECODER = stringPreferencesKey("default_decoder")
         val KEY_DEFAULT_ASPECT = stringPreferencesKey("default_aspect")
@@ -34,6 +37,14 @@ class UserPreferencesManager(private val context: Context) {
 
     val pinCodeFlow: Flow<String?> = context.dataStore.data.map { preferences ->
         preferences[KEY_PIN_CODE]
+    }
+
+    val securityQuestionFlow: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SECURITY_QUESTION]
+    }
+
+    val securityAnswerFlow: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SECURITY_ANSWER]
     }
 
     val vaultExtensionFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -80,10 +91,27 @@ class UserPreferencesManager(private val context: Context) {
         vaultSecurityManager.savePin(pin)
     }
 
+    suspend fun setSecurityQuestionAndAnswer(question: String, answer: String) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SECURITY_QUESTION] = question.trim()
+            preferences[KEY_SECURITY_ANSWER] = answer.trim().lowercase()
+        }
+    }
+
+    suspend fun verifySecurityAnswer(enteredAnswer: String): Boolean {
+        val saved = context.dataStore.data.first()[KEY_SECURITY_ANSWER] ?: return false
+        return saved.isNotBlank() && saved.equals(enteredAnswer.trim(), ignoreCase = true)
+    }
+
     suspend fun setVaultExtension(extension: String) {
         val cleanExt = extension.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
         context.dataStore.edit { preferences ->
-            preferences[KEY_VAULT_EXTENSION] = cleanExt
+            val current = preferences[KEY_VAULT_EXTENSION] ?: "1ca"
+            val exts = current.split(",").map { it.trim().removePrefix(".").lowercase() }.filter { it.isNotBlank() }
+            if (!exts.contains(cleanExt)) {
+                val updated = if (current.isBlank()) cleanExt else "$current,$cleanExt"
+                preferences[KEY_VAULT_EXTENSION] = updated
+            }
         }
     }
 

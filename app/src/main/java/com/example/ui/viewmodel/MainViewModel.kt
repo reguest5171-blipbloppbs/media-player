@@ -228,8 +228,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return correct
     }
 
+    val securityQuestion: StateFlow<String?> = preferencesManager.securityQuestionFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     suspend fun checkPinMatches(pin: String): Boolean {
         val isMatch = preferencesManager.vaultSecurityManager.verifyPin(pin)
+        if (isMatch) {
+            _uiState.value = _uiState.value.copy(
+                isLockModeUnlocked = true,
+                hasPinConfigured = true
+            )
+            refreshCurrentViewAfterLockChange()
+        }
+        return isMatch
+    }
+
+    suspend fun verifySecurityAnswer(answer: String): Boolean {
+        val isMatch = preferencesManager.verifySecurityAnswer(answer)
         if (isMatch) {
             _uiState.value = _uiState.value.copy(
                 isLockModeUnlocked = true,
@@ -245,15 +260,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun configurePinAndExtension(newPin: String, customExtension: String) {
+        configurePinAndExtensionWithQuestion(newPin, customExtension, "", "")
+    }
+
+    fun configurePinAndExtensionWithQuestion(
+        newPin: String,
+        customExtension: String,
+        question: String,
+        answer: String
+    ) {
         viewModelScope.launch {
             val cleanExt = customExtension.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
-            preferencesManager.setPinCode(newPin)
+            if (newPin.isNotBlank()) {
+                preferencesManager.setPinCode(newPin)
+            }
             preferencesManager.setVaultExtension(cleanExt)
+            if (question.isNotBlank() && answer.isNotBlank()) {
+                preferencesManager.setSecurityQuestionAndAnswer(question, answer)
+            }
+            val updatedExts = preferencesManager.vaultExtensionFlow.first()
             _uiState.value = _uiState.value.copy(
                 hasPinConfigured = true,
                 isLockModeUnlocked = true,
-                vaultExtension = cleanExt,
-                messageSnackbar = "PIN & Ekstensi .$cleanExt berhasil disimpan!"
+                vaultExtension = updatedExts,
+                messageSnackbar = "PIN & Pengaturan Keamanan berhasil disimpan!"
             )
             refreshCurrentViewAfterLockChange()
         }

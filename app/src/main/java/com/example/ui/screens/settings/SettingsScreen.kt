@@ -72,6 +72,7 @@ fun SettingsScreen(
     val autoScan by preferencesManager.autoScanFlow.collectAsStateWithLifecycle(initialValue = true)
     val resumePlayback by preferencesManager.resumePlaybackFlow.collectAsStateWithLifecycle(initialValue = true)
     val savedPin by preferencesManager.pinCodeFlow.collectAsStateWithLifecycle(initialValue = null)
+    val vaultExtension by preferencesManager.vaultExtensionFlow.collectAsStateWithLifecycle(initialValue = "1ca")
 
     var showDecoderDialog by remember { mutableStateOf(false) }
     var showPinDialog by remember { mutableStateOf(false) }
@@ -366,11 +367,26 @@ fun SettingsScreen(
         }
     }
 
+    val savedQuestion by preferencesManager.securityQuestionFlow.collectAsStateWithLifecycle(initialValue = null)
+
     if (showPinDialog) {
         PinDialog(
             isSettingNewPin = true,
             hasExistingPin = !savedPin.isNullOrBlank(),
+            initialVaultExtension = vaultExtension,
+            savedSecurityQuestion = savedQuestion,
             onVerifyPin = { pin -> preferencesManager.vaultSecurityManager.verifyPin(pin) },
+            onVerifySecurityAnswer = { ans -> preferencesManager.verifySecurityAnswer(ans) },
+            onPinExtensionAndQuestionSuccess = { newPin, ext, question, answer ->
+                scope.launch {
+                    if (newPin.isNotBlank()) preferencesManager.setPinCode(newPin)
+                    preferencesManager.setVaultExtension(ext)
+                    if (question.isNotBlank() && answer.isNotBlank()) {
+                        preferencesManager.setSecurityQuestionAndAnswer(question, answer)
+                    }
+                }
+                showPinDialog = false
+            },
             onPinSuccess = { newPin ->
                 scope.launch { preferencesManager.setPinCode(newPin) }
                 showPinDialog = false

@@ -93,6 +93,7 @@ class MediaPlayerManager(private val context: Context) {
 
     private fun createExtractorsFactory(): DefaultExtractorsFactory {
         return DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
     }
 
     @Synchronized
@@ -301,6 +302,12 @@ class MediaPlayerManager(private val context: Context) {
             val smbFactory = SmbDataSource.Factory()
             val mediaItem = MediaItem.fromUri(media.uri)
             return ProgressiveMediaSource.Factory(smbFactory, extractorsFactory).createMediaSource(mediaItem)
+        }
+
+        if (media.streamType == StreamType.FTP || media.path.startsWith("ftp://") || media.uri.scheme == "ftp") {
+            val ftpFactory = FtpDataSource.Factory()
+            val mediaItem = MediaItem.fromUri(media.uri)
+            return ProgressiveMediaSource.Factory(ftpFactory, extractorsFactory).createMediaSource(mediaItem)
         }
 
         if (media.streamType == StreamType.URL_STREAM || media.path.startsWith("http://") || media.path.startsWith("https://")) {

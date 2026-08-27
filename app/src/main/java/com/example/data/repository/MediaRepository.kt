@@ -188,8 +188,9 @@ class MediaRepository(
                 scanDirectoryRecursively(file, results, seenPaths, cleanCustomExt, includeVault1ca, depth + 1)
             } else if (file.isFile) {
                 val name = file.name
+                val customExtList = cleanCustomExt.split(",").map { it.trim().removePrefix(".").lowercase() }.filter { it.isNotBlank() }
                 val is1ca = name.endsWith(".1ca", ignoreCase = true) ||
-                        (cleanCustomExt.isNotBlank() && name.endsWith(".$cleanCustomExt", ignoreCase = true))
+                        customExtList.any { ext -> name.endsWith(".$ext", ignoreCase = true) }
                 val isVideo = isSupportedVideoFile(name)
 
                 if ((isVideo || is1ca) && !seenPaths.contains(file.absolutePath)) {
