@@ -106,13 +106,13 @@ class MediaPlayerManager(private val context: Context) {
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
-        // Balanced load control for high-res x264/x265 MKV playback without buffering stalls
+        // Load control tuned for instant playback start and smooth buffering
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2500,  // min buffer 2.5s
-                30000, // max buffer 30s
-                1000,  // buffer for playback 1s
-                2000   // buffer for rebuffering 2s
+                15000, // min buffer 15s
+                50000, // max buffer 50s
+                500,   // buffer for playback 0.5s (instant start)
+                1000   // buffer for rebuffering 1s
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -148,23 +148,6 @@ class MediaPlayerManager(private val context: Context) {
                     isLoading = isLoading,
                     durationMs = duration
                 )
-
-                // Watchdog: If HW HEVC decoder stalls in STATE_BUFFERING for > 2.5s, auto switch to SW decoder
-                if (playbackState == Player.STATE_BUFFERING && player.playWhenReady && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
-                    val mediaWhenBufferingStarted = currentMediaItem
-                    coroutineScope.launch {
-                        delay(2500L)
-                        if (exoPlayer?.playbackState == Player.STATE_BUFFERING &&
-                            exoPlayer?.playWhenReady == true &&
-                            currentMediaItem == mediaWhenBufferingStarted &&
-                            activeDecoderMode != DecoderMode.SW &&
-                            !fallbackAttempted
-                        ) {
-                            fallbackAttempted = true
-                            switchToDecoder(DecoderMode.SW)
-                        }
-                    }
-                }
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
