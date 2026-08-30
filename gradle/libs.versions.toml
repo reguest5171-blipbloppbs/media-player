@@ -44,6 +44,7 @@ googleid = "1.1.1"
 media3 = "1.5.1"
 commonsNet = "3.10.0"
 jcifsNg = "2.1.10"
+nextlib = "0.7.0"
 
 
 [libraries]
@@ -111,6 +112,7 @@ media3-exoplayer-rtsp = { group = "androidx.media3", name = "media3-exoplayer-rt
 media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 commons-net = { group = "commons-net", name = "commons-net", version.ref = "commonsNet" }
 jcifs = { group = "eu.agno3.jcifs", name = "jcifs-ng", version.ref = "jcifsNg" }
+nextlib-media3ext = { group = "io.github.anilbeesetti.nextlib", name = "nextlib-media3ext", version.ref = "nextlib" }
 
 
 [plugins]

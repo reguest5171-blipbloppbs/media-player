@@ -19,6 +19,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -148,6 +149,29 @@ class MediaPlayerManager(private val context: Context) {
                     isLoading = isLoading,
                     durationMs = duration
                 )
+
+                // Watchdog: If player stalls in STATE_BUFFERING for > 4.0s while playWhenReady at start, auto-fallback or report error
+                if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                    val targetMedia = currentMediaItem
+                    coroutineScope.launch {
+                        delay(4000L)
+                        if (exoPlayer?.playbackState == Player.STATE_BUFFERING &&
+                            exoPlayer?.playWhenReady == true &&
+                            currentMediaItem == targetMedia
+                        ) {
+                            if (!fallbackAttempted) {
+                                fallbackAttempted = true
+                                val fallbackMode = if (activeDecoderMode == DecoderMode.SW) DecoderMode.HW else DecoderMode.SW
+                                switchToDecoder(fallbackMode)
+                            } else if (_playerState.value.errorMessage == null) {
+                                _playerState.value = _playerState.value.copy(
+                                    isLoading = false,
+                                    errorMessage = "Decoder perangkat keras/lunak Android 8 ini tidak mendukung pemutaran video HEVC 10-bit (x265 Main 10)."
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -219,34 +243,43 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
-        val rf = DefaultRenderersFactory(context)
+        val rf = NextRenderersFactory(context)
         rf.setEnableDecoderFallback(true)
         rf.setAllowedVideoJoiningTimeMs(5000)
 
         val nextPlayerMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
             val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
-            val isHevc = mimeType.equals(MimeTypes.VIDEO_H265, ignoreCase = true) || mimeType.equals("video/hevc", ignoreCase = true)
+            val isHevc = mimeType.equals(MimeTypes.VIDEO_H265, ignoreCase = true) ||
+                    mimeType.equals("video/hevc", ignoreCase = true) ||
+                    mimeType.contains("hevc", ignoreCase = true) ||
+                    mimeType.contains("265", ignoreCase = true)
 
-            when (decoderMode) {
-                DecoderMode.SW -> {
-                    val swDecoders = decoders.filter {
-                        it.name.startsWith("c2.android.") ||
-                        it.name.startsWith("OMX.google.") ||
-                        it.name.contains("sw", ignoreCase = true) ||
-                        it.name.contains("software", ignoreCase = true) ||
-                        (isHevc && !it.hardwareAccelerated)
-                    }
-                    val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
-                    if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
+            if (isHevc) {
+                // HEVC Main 10 (10-bit x265) is NOT supported by AOSP software HEVC decoder (OMX.google.hevc.decoder / c2.android.hevc.decoder).
+                // On Android 8, AOSP software HEVC decoders accept 10-bit input but stall in buffering forever.
+                // Filter out AOSP software HEVC decoders and force non-software/hardware decoders.
+                val validDecoders = decoders.filterNot {
+                    it.name.startsWith("OMX.google.", ignoreCase = true) ||
+                    it.name.startsWith("c2.android.", ignoreCase = true) ||
+                    it.name.contains("google", ignoreCase = true)
                 }
-                DecoderMode.HW, DecoderMode.HW_PLUS -> {
-                    if (isHevc) {
-                        // Next Player HEVC Strategy: Prioritize hardware decoders, with seamless fallback to C2/OMX HEVC SW decoders
+                if (validDecoders.isNotEmpty()) validDecoders else decoders
+            } else {
+                when (decoderMode) {
+                    DecoderMode.SW -> {
+                        val swDecoders = decoders.filter {
+                            it.name.startsWith("c2.android.") ||
+                            it.name.startsWith("OMX.google.") ||
+                            it.name.contains("sw", ignoreCase = true) ||
+                            it.name.contains("software", ignoreCase = true)
+                        }
+                        val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
+                        if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
+                    }
+                    DecoderMode.HW, DecoderMode.HW_PLUS -> {
                         val hwDecoders = decoders.filter { it.hardwareAccelerated }
                         val swDecoders = decoders.filterNot { it.hardwareAccelerated }
                         if (hwDecoders.isNotEmpty()) hwDecoders + swDecoders else decoders
-                    } else {
-                        decoders
                     }
                 }
             }
