@@ -53,10 +53,10 @@ class NetworkMediaRepository(
     fun getPresetSampleStreams(): List<SampleStreamItem> {
         return listOf(
             SampleStreamItem(
-                title = "Big Buck Bunny (HLS Multi-Quality)",
-                url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                description = "HLS Adaptive Stream (1080p/720p/480p/360p)",
-                formatTag = "HLS M3U8"
+                title = "Big Buck Bunny (720p HD MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                description = "Google Cloud CDN Fast 720p HD Stream",
+                formatTag = "720p MP4"
             ),
             SampleStreamItem(
                 title = "Sintel (1080p Full HD MP4)",
@@ -65,40 +65,52 @@ class NetworkMediaRepository(
                 formatTag = "1080p MP4"
             ),
             SampleStreamItem(
-                title = "Big Buck Bunny (720p Fast MP4)",
-                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-                description = "Lightweight MP4 for legacy / HP kentang test",
-                formatTag = "720p MP4"
-            ),
-            SampleStreamItem(
-                title = "Tears of Steel (Sci-Fi 1080p)",
+                title = "Tears of Steel (1080p Sci-Fi MP4)",
                 url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
                 description = "High Quality Cinematic Benchmark",
                 formatTag = "1080p MP4"
             ),
             SampleStreamItem(
-                title = "Elephant's Dream (Classic MKV/MP4)",
+                title = "Elephant's Dream (1080p Full HD MP4)",
                 url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-                description = "Open Movie Project High Bitrate",
-                formatTag = "720p MP4"
+                description = "Open Movie Project High Bitrate MP4",
+                formatTag = "1080p MP4"
             ),
             SampleStreamItem(
-                title = "Apple BipBop 16x9 Test Stream",
-                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
-                description = "Apple HLS Reference Test Pattern",
+                title = "For Bigger Blazes (1080p Short MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+                description = "Google Chromecast HD Test Stream",
+                formatTag = "1080p MP4"
+            ),
+            SampleStreamItem(
+                title = "We Are Going On Bullrun (1080p MP4)",
+                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
+                description = "Google Storage High Bitrate Action Clip",
+                formatTag = "1080p MP4"
+            ),
+            SampleStreamItem(
+                title = "Big Buck Bunny (Mux HLS Adaptive Stream)",
+                url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                description = "HLS Adaptive Stream (1080p/720p/480p/360p)",
                 formatTag = "HLS M3U8"
             ),
             SampleStreamItem(
-                title = "For Bigger Blazes (Short Sample)",
-                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-                description = "Chromecast HD Short Test Clip",
-                formatTag = "1080p MP4"
+                title = "Sintel (Akamai HLS Adaptive Stream)",
+                url = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                description = "Akamai CDN Multi-bitrate HLS Stream",
+                formatTag = "Akamai HLS"
             ),
             SampleStreamItem(
-                title = "We Are Going On Bullrun (HD Sample)",
-                url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
-                description = "Google High Bitrate Test Stream",
-                formatTag = "1080p MP4"
+                title = "Apple BipBop 16x9 Test Pattern",
+                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
+                description = "Apple HLS Reference Test Pattern",
+                formatTag = "Apple HLS"
+            ),
+            SampleStreamItem(
+                title = "Tears of Steel (Unified Streaming HLS)",
+                url = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+                description = "Unified Streaming Multi-Audio HLS Stream",
+                formatTag = "HLS M3U8"
             )
         )
     }
@@ -112,6 +124,38 @@ class NetworkMediaRepository(
                     url = sample.url
                 )
             )
+        }
+    }
+
+    suspend fun addMissingPresetSamples() {
+        val current = dao.getAllBookmarksSync()
+        val samples = getPresetSampleStreams()
+        val sampleUrls = samples.map { it.url }.toSet()
+
+        // Clean up broken/invalid old sample URLs from DB
+        for (bookmark in current) {
+            if (bookmark.url.contains("jellyfin.org") ||
+                bookmark.url.contains("test-videos.co.uk") ||
+                bookmark.url.contains("jellyfish.media") ||
+                bookmark.url.contains("filesfortesting.com") ||
+                bookmark.url.contains("photoprism")
+            ) {
+                dao.deleteBookmark(bookmark.id)
+            }
+        }
+
+        val updatedCurrent = dao.getAllBookmarksSync()
+        val currentUrls = updatedCurrent.map { it.url }.toSet()
+
+        for (sample in samples) {
+            if (!currentUrls.contains(sample.url)) {
+                dao.insertBookmark(
+                    StreamBookmarkEntity(
+                        title = sample.title,
+                        url = sample.url
+                    )
+                )
+            }
         }
     }
 

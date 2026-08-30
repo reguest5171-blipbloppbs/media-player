@@ -41,6 +41,9 @@ interface MediaPlayerDao {
     @Query("SELECT * FROM stream_bookmarks ORDER BY addedTimestamp DESC")
     fun getAllBookmarks(): Flow<List<StreamBookmarkEntity>>
 
+    @Query("SELECT * FROM stream_bookmarks")
+    suspend fun getAllBookmarksSync(): List<StreamBookmarkEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBookmark(bookmark: StreamBookmarkEntity): Long
 

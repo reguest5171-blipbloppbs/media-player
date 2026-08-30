@@ -100,8 +100,11 @@ class MediaPlayerManager(private val context: Context) {
     @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
         try {
+            exoPlayer?.stop()
+            exoPlayer?.clearMediaItems()
             exoPlayer?.release()
         } catch (_: Exception) {}
+        exoPlayer = null
 
         activeDecoderMode = decoderMode
 
@@ -157,16 +160,17 @@ class MediaPlayerManager(private val context: Context) {
                         delay(4000L)
                         if (exoPlayer?.playbackState == Player.STATE_BUFFERING &&
                             exoPlayer?.playWhenReady == true &&
-                            currentMediaItem == targetMedia
+                            currentMediaItem == targetMedia &&
+                            _playerState.value.errorMessage == null
                         ) {
                             if (!fallbackAttempted) {
                                 fallbackAttempted = true
                                 val fallbackMode = if (activeDecoderMode == DecoderMode.SW) DecoderMode.HW else DecoderMode.SW
                                 switchToDecoder(fallbackMode)
-                            } else if (_playerState.value.errorMessage == null) {
+                            } else {
                                 _playerState.value = _playerState.value.copy(
                                     isLoading = false,
-                                    errorMessage = "Decoder perangkat keras/lunak Android 8 ini tidak mendukung pemutaran video HEVC 10-bit (x265 Main 10)."
+                                    errorMessage = "Decoder perangkat keras/lunak Android 8 ini tidak mendukung pemutaran format video ini."
                                 )
                             }
                         }
@@ -205,11 +209,13 @@ class MediaPlayerManager(private val context: Context) {
                     currentCause = currentCause.cause
                 }
 
-                val isDecoderError = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                val isDecoderError = !isNetworkError && (
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+                )
 
                 // If HW decoder fails on low-end device, auto fallback to SW decoder once (only for decoder/codec errors, NOT network/404/403 errors)
                 if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
@@ -243,12 +249,22 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
-        val rf = NextRenderersFactory(context)
+        val rf = try {
+            NextRenderersFactory(context)
+        } catch (_: Throwable) {
+            DefaultRenderersFactory(context)
+        }
         rf.setEnableDecoderFallback(true)
         rf.setAllowedVideoJoiningTimeMs(5000)
 
         val nextPlayerMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-            val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+            val decoders = try {
+                MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (decoders.isEmpty()) return@MediaCodecSelector emptyList()
+
             val isHevc = mimeType.equals(MimeTypes.VIDEO_H265, ignoreCase = true) ||
                     mimeType.equals("video/hevc", ignoreCase = true) ||
                     mimeType.contains("hevc", ignoreCase = true) ||
@@ -268,8 +284,8 @@ class MediaPlayerManager(private val context: Context) {
                 when (decoderMode) {
                     DecoderMode.SW -> {
                         val swDecoders = decoders.filter {
-                            it.name.startsWith("c2.android.") ||
-                            it.name.startsWith("OMX.google.") ||
+                            it.name.startsWith("c2.android.", ignoreCase = true) ||
+                            it.name.startsWith("OMX.google.", ignoreCase = true) ||
                             it.name.contains("sw", ignoreCase = true) ||
                             it.name.contains("software", ignoreCase = true)
                         }
@@ -286,11 +302,7 @@ class MediaPlayerManager(private val context: Context) {
         }
 
         rf.setMediaCodecSelector(nextPlayerMediaCodecSelector)
-
-        when (decoderMode) {
-            DecoderMode.SW -> rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-            DecoderMode.HW, DecoderMode.HW_PLUS -> rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-        }
+        rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         return rf
     }
 

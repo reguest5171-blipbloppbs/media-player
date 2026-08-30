@@ -142,18 +142,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             // Auto populate preset test stream URLs so user has instant test videos
             try {
-                val currentBookmarks = networkRepository.bookmarksFlow.first()
-                if (currentBookmarks.isEmpty()) {
-                    networkRepository.populatePresetSamplesIfEmpty()
-                }
+                networkRepository.addMissingPresetSamples()
             } catch (_: Exception) {}
         }
     }
 
     fun loadPresetSampleStreams() {
         viewModelScope.launch {
-            networkRepository.populatePresetSamplesIfEmpty()
-            _uiState.value = _uiState.value.copy(messageSnackbar = "Preset contoh streaming berhasil dimuat!")
+            networkRepository.addMissingPresetSamples()
+            _uiState.value = _uiState.value.copy(messageSnackbar = "Preset contoh streaming HEVC & HLS berhasil dimuat!")
         }
     }
 

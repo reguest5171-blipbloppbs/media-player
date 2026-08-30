@@ -262,7 +262,10 @@ fun PlayerScreen(
             },
             update = { playerView ->
                 try {
-                    playerView.player = viewModel.playerManager.getPlayer()
+                    val activePlayer = viewModel.playerManager.getPlayer()
+                    if (playerView.player != activePlayer) {
+                        playerView.player = activePlayer
+                    }
                     when (playerState.aspectRatioMode) {
                         AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.CROP -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
