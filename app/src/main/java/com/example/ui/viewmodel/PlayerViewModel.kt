@@ -172,6 +172,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         playerManager.cycleDecoder()
     }
 
+    fun toggleDebugDialog() {
+        playerManager.toggleDebugDialog()
+    }
+
+    fun setDebugDialogVisible(visible: Boolean) {
+        playerManager.setDebugDialogVisible(visible)
+    }
+
+    fun clearDebugLogs() {
+        playerManager.clearDebugLogs()
+    }
+
     fun setAspectRatio(mode: AspectRatioMode) {
         playerManager.setAspectRatioMode(mode)
     }

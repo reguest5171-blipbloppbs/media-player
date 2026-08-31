@@ -31,6 +31,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
@@ -331,14 +341,20 @@ fun PlayerScreen(
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             androidx.compose.material3.OutlinedButton(
                                 onClick = onBack,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Kembali")
+                                Text("Kembali", fontSize = 12.sp)
+                            }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { viewModel.toggleDebugDialog() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Debug Info", fontSize = 12.sp)
                             }
                             androidx.compose.material3.Button(
                                 onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
@@ -347,7 +363,7 @@ fun PlayerScreen(
                                     containerColor = MaterialTheme.colorScheme.primary
                                 )
                             ) {
-                                Text("Mode SW")
+                                Text("Mode SW", fontSize = 12.sp)
                             }
                         }
                     }
@@ -579,6 +595,17 @@ fun PlayerScreen(
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Decoder Debug Info Button
+                        IconButton(onClick = { viewModel.toggleDebugDialog() }) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "Decoder Debug Info",
+                                tint = Color(0xFFFFD54F)
                             )
                         }
 
@@ -983,6 +1010,259 @@ fun PlayerScreen(
                 }
             }
         }
+        if (playerState.showDebugDialog) {
+            DecoderDebugDialog(
+                playerState = playerState,
+                onDismiss = { viewModel.setDebugDialogVisible(false) },
+                onSelectDecoderMode = { viewModel.setDecoderMode(it) },
+                onClearLogs = { viewModel.clearDebugLogs() }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DecoderDebugDialog(
+    playerState: com.example.player.PlayerState,
+    onDismiss: () -> Unit,
+    onSelectDecoderMode: (DecoderMode) -> Unit,
+    onClearLogs: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val scrollState = rememberScrollState()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E2C)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(scrollState)
+            ) {
+                // Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD54F),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Debug Dekoder Video",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Decoder Mode Selector Chips
+                Text(
+                    text = "Mode Dekoder Aktif:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    DecoderMode.values().forEach { mode ->
+                        val isSelected = playerState.decoderMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) {
+                                        when (mode) {
+                                            DecoderMode.HW -> Color(0xFF1976D2)
+                                            DecoderMode.SW -> Color(0xFFD32F2F)
+                                            DecoderMode.HW_PLUS -> Color(0xFF7B1FA2)
+                                        }
+                                    } else Color(0xFF2D2D44)
+                                )
+                                .clickable { onSelectDecoderMode(mode) }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = mode.label,
+                                color = if (isSelected) Color.White else Color.LightGray,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Information Card
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF12121A)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        DebugItemRow(label = "Status Loading", value = if (playerState.isLoading) "Memuat (BUFFERING)..." else "Diputar (READY)")
+                        DebugItemRow(label = "Dekoder Video", value = playerState.activeVideoDecoder, isHighlight = true)
+                        DebugItemRow(label = "Format Video", value = playerState.videoFormatDetails)
+                        DebugItemRow(label = "Dekoder Audio", value = playerState.activeAudioDecoder)
+                        DebugItemRow(label = "Format Audio", value = playerState.audioFormatDetails)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // System MediaCodec List
+                Text(
+                    text = "Dekoder Sistem Terdeteksi (MediaCodecList):",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.Gray
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF12121A)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        if (playerState.availableSystemDecoders.isEmpty()) {
+                            Text(
+                                text = "Menunggu pemuatan format video...",
+                                fontSize = 12.sp,
+                                color = Color.Gray
+                            )
+                        } else {
+                            playerState.availableSystemDecoders.forEach { dec ->
+                                Text(
+                                    text = "• $dec",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (dec.contains("[SW]")) Color(0xFFFF8A80) else Color(0xFF81C784),
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Live Event Logs
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Log Kejadian Live (Real-Time Logs):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.Gray
+                    )
+                    Row {
+                        IconButton(
+                            onClick = {
+                                val fullLog = playerState.decoderDebugLogs.joinToString("\n")
+                                clipboardManager.setText(AnnotatedString(fullLog))
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                        }
+                        IconButton(
+                            onClick = onClearLogs,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear", tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0F)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                ) {
+                    val logScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(10.dp)
+                            .verticalScroll(logScroll)
+                    ) {
+                        if (playerState.decoderDebugLogs.isEmpty()) {
+                            Text("Belum ada log.", color = Color.DarkGray, fontSize = 11.sp)
+                        } else {
+                            playerState.decoderDebugLogs.forEach { log ->
+                                Text(
+                                    text = log,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when {
+                                        log.contains("Error", ignoreCase = true) -> Color(0xFFFF5252)
+                                        log.contains("Aktif", ignoreCase = true) -> Color(0xFFFFD54F)
+                                        log.contains("SW", ignoreCase = true) -> Color(0xFFFF8A65)
+                                        else -> Color(0xFFB0BEC5)
+                                    },
+                                    modifier = Modifier.padding(vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                androidx.compose.material3.Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("Tutup", color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DebugItemRow(label: String, value: String, isHighlight: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(text = label, fontSize = 11.sp, color = Color.Gray)
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value.ifEmpty { "-" },
+            fontSize = 11.sp,
+            fontWeight = if (isHighlight) FontWeight.Bold else FontWeight.Normal,
+            fontFamily = FontFamily.Monospace,
+            color = if (isHighlight) Color(0xFFFFD54F) else Color.White,
+            textAlign = TextAlign.End
+        )
     }
 }
 

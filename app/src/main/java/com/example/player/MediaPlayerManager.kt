@@ -1,9 +1,12 @@
 package com.example.player
 
 import android.content.Context
+import android.media.MediaCodecList
 import android.net.Uri
+import android.os.Build
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -17,10 +20,12 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -64,7 +69,14 @@ data class PlayerState(
     val subtitleTracks: List<PlayerTrackInfo> = emptyList(),
     val isMuted: Boolean = false,
     val errorMessage: String? = null,
-    val videoCodecName: String = "Auto"
+    val videoCodecName: String = "Auto",
+    val activeVideoDecoder: String = "Belum terdeteksi",
+    val activeAudioDecoder: String = "Belum terdeteksi",
+    val videoFormatDetails: String = "-",
+    val audioFormatDetails: String = "-",
+    val availableSystemDecoders: List<String> = emptyList(),
+    val decoderDebugLogs: List<String> = emptyList(),
+    val showDebugDialog: Boolean = false
 )
 
 @OptIn(UnstableApi::class)
@@ -74,6 +86,48 @@ class MediaPlayerManager(private val context: Context) {
     private var exoPlayer: ExoPlayer? = null
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
+
+    private val debugLogs = mutableListOf<String>()
+
+    private fun addDebugLog(msg: String) {
+        val timestamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+        val logLine = "[$timestamp] $msg"
+        synchronized(debugLogs) {
+            debugLogs.add(0, logLine)
+            if (debugLogs.size > 80) debugLogs.removeAt(debugLogs.size - 1)
+        }
+        _playerState.value = _playerState.value.copy(decoderDebugLogs = ArrayList(debugLogs))
+    }
+
+    private fun queryAvailableDecoders(mimeType: String? = null): List<String> {
+        return try {
+            val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            val result = mutableListOf<String>()
+            for (info in codecList.codecInfos) {
+                if (info.isEncoder) continue
+                val types = info.supportedTypes
+                val matches = if (mimeType.isNullOrEmpty()) {
+                    types.any { it.startsWith("video/") }
+                } else {
+                    types.any { it.equals(mimeType, ignoreCase = true) || it.contains(mimeType.replace("video/", ""), ignoreCase = true) }
+                }
+                if (matches) {
+                    val isHw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        info.isHardwareAccelerated
+                    } else {
+                        !info.name.startsWith("OMX.google.", ignoreCase = true) &&
+                        !info.name.startsWith("c2.android.", ignoreCase = true)
+                    }
+                    val tag = if (isHw) "[HW]" else "[SW]"
+                    val typesStr = types.filter { it.startsWith("video/") }.joinToString(", ")
+                    result.add("${info.name} $tag ($typesStr)")
+                }
+            }
+            if (result.isEmpty()) listOf("Tidak ditemukan dekoder untuk $mimeType") else result
+        } catch (e: Exception) {
+            listOf("Gagal membaca MediaCodecList: ${e.message}")
+        }
+    }
 
     private var currentMediaItem: VideoMediaItem? = null
     private var activeDecoderMode: DecoderMode = DecoderMode.HW
@@ -138,6 +192,77 @@ class MediaPlayerManager(private val context: Context) {
             .setMediaSourceFactory(mediaSourceFactory)
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .build()
+
+        addDebugLog("ExoPlayer diinisialisasi dalam mode $decoderMode")
+
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                val hwTag = if (decoderName.startsWith("OMX.google.", ignoreCase = true) || decoderName.startsWith("c2.android.", ignoreCase = true)) "[SW]" else "[HW]"
+                val label = "$decoderName $hwTag (Init: ${initializationDurationMs}ms)"
+                addDebugLog("Dekoder Video Aktif -> $label")
+                _playerState.value = _playerState.value.copy(activeVideoDecoder = label)
+            }
+
+            override fun onAudioDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                addDebugLog("Dekoder Audio Aktif -> $decoderName")
+                _playerState.value = _playerState.value.copy(activeAudioDecoder = decoderName)
+            }
+
+            override fun onVideoInputFormatChanged(
+                eventTime: AnalyticsListener.EventTime,
+                format: Format,
+                decoderReuseEvaluation: DecoderReuseEvaluation?
+            ) {
+                val details = "MIME=${format.sampleMimeType ?: "unknown"}, ${format.width}x${format.height}, Codec=${format.codecs ?: "-"}"
+                addDebugLog("Format Video -> $details")
+                val available = queryAvailableDecoders(format.sampleMimeType)
+                _playerState.value = _playerState.value.copy(
+                    videoFormatDetails = details,
+                    availableSystemDecoders = available
+                )
+            }
+
+            override fun onAudioInputFormatChanged(
+                eventTime: AnalyticsListener.EventTime,
+                format: Format,
+                decoderReuseEvaluation: DecoderReuseEvaluation?
+            ) {
+                val details = "MIME=${format.sampleMimeType ?: "unknown"}, Ch=${format.channelCount}, ${format.sampleRate}Hz"
+                addDebugLog("Format Audio -> $details")
+                _playerState.value = _playerState.value.copy(audioFormatDetails = details)
+            }
+
+            override fun onPlaybackStateChanged(
+                eventTime: AnalyticsListener.EventTime,
+                state: Int
+            ) {
+                val stateName = when (state) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "UNKNOWN ($state)"
+                }
+                addDebugLog("Status Playback -> $stateName")
+            }
+
+            override fun onPlayerError(
+                eventTime: AnalyticsListener.EventTime,
+                error: PlaybackException
+            ) {
+                addDebugLog("Analytics Error: ${error.errorCodeName} - ${error.message}")
+            }
+        })
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -532,6 +657,21 @@ class MediaPlayerManager(private val context: Context) {
             durationMs = dur,
             bufferedPositionMs = buffered
         )
+    }
+
+    fun setDebugDialogVisible(visible: Boolean) {
+        _playerState.value = _playerState.value.copy(showDebugDialog = visible)
+    }
+
+    fun toggleDebugDialog() {
+        setDebugDialogVisible(!_playerState.value.showDebugDialog)
+    }
+
+    fun clearDebugLogs() {
+        synchronized(debugLogs) {
+            debugLogs.clear()
+        }
+        _playerState.value = _playerState.value.copy(decoderDebugLogs = emptyList())
     }
 
     fun release() {
