@@ -19,7 +19,6 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -249,15 +248,11 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
-        val rf = try {
-            NextRenderersFactory(context)
-        } catch (_: Throwable) {
-            DefaultRenderersFactory(context)
-        }
+        val rf = DefaultRenderersFactory(context)
         rf.setEnableDecoderFallback(true)
         rf.setAllowedVideoJoiningTimeMs(5000)
 
-        val nextPlayerMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+        val customMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
             val decoders = try {
                 MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
             } catch (_: Exception) {
@@ -265,44 +260,28 @@ class MediaPlayerManager(private val context: Context) {
             }
             if (decoders.isEmpty()) return@MediaCodecSelector emptyList()
 
-            val isHevc = mimeType.equals(MimeTypes.VIDEO_H265, ignoreCase = true) ||
-                    mimeType.equals("video/hevc", ignoreCase = true) ||
-                    mimeType.contains("hevc", ignoreCase = true) ||
-                    mimeType.contains("265", ignoreCase = true)
-
-            if (isHevc) {
-                // HEVC Main 10 (10-bit x265) is NOT supported by AOSP software HEVC decoder (OMX.google.hevc.decoder / c2.android.hevc.decoder).
-                // On Android 8, AOSP software HEVC decoders accept 10-bit input but stall in buffering forever.
-                // Filter out AOSP software HEVC decoders and force non-software/hardware decoders.
-                val validDecoders = decoders.filterNot {
-                    it.name.startsWith("OMX.google.", ignoreCase = true) ||
-                    it.name.startsWith("c2.android.", ignoreCase = true) ||
-                    it.name.contains("google", ignoreCase = true)
+            when (decoderMode) {
+                DecoderMode.SW -> {
+                    val swDecoders = decoders.filter {
+                        !it.hardwareAccelerated ||
+                        it.name.startsWith("c2.android.", ignoreCase = true) ||
+                        it.name.startsWith("OMX.google.", ignoreCase = true) ||
+                        it.name.contains("sw", ignoreCase = true) ||
+                        it.name.contains("software", ignoreCase = true)
+                    }
+                    val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
+                    if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
                 }
-                if (validDecoders.isNotEmpty()) validDecoders else decoders
-            } else {
-                when (decoderMode) {
-                    DecoderMode.SW -> {
-                        val swDecoders = decoders.filter {
-                            it.name.startsWith("c2.android.", ignoreCase = true) ||
-                            it.name.startsWith("OMX.google.", ignoreCase = true) ||
-                            it.name.contains("sw", ignoreCase = true) ||
-                            it.name.contains("software", ignoreCase = true)
-                        }
-                        val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
-                        if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
-                    }
-                    DecoderMode.HW, DecoderMode.HW_PLUS -> {
-                        val hwDecoders = decoders.filter { it.hardwareAccelerated }
-                        val swDecoders = decoders.filterNot { it.hardwareAccelerated }
-                        if (hwDecoders.isNotEmpty()) hwDecoders + swDecoders else decoders
-                    }
+                DecoderMode.HW, DecoderMode.HW_PLUS -> {
+                    val hwDecoders = decoders.filter { it.hardwareAccelerated }
+                    val swDecoders = decoders.filterNot { it.hardwareAccelerated }
+                    if (hwDecoders.isNotEmpty()) hwDecoders + swDecoders else decoders
                 }
             }
         }
 
-        rf.setMediaCodecSelector(nextPlayerMediaCodecSelector)
-        rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        rf.setMediaCodecSelector(customMediaCodecSelector)
+        rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
         return rf
     }
 
