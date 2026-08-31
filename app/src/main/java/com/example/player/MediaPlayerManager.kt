@@ -112,9 +112,9 @@ class MediaPlayerManager(private val context: Context) {
         // Load control tuned for instant playback start and smooth buffering
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15000, // min buffer 15s
-                50000, // max buffer 50s
-                500,   // buffer for playback 0.5s (instant start)
+                2500,  // min buffer 2.5s (instant start)
+                30000, // max buffer 30s
+                500,   // buffer for playback 0.5s
                 1000   // buffer for rebuffering 1s
             )
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -163,13 +163,12 @@ class MediaPlayerManager(private val context: Context) {
                             _playerState.value.errorMessage == null
                         ) {
                             if (!fallbackAttempted) {
-                                fallbackAttempted = true
                                 val fallbackMode = if (activeDecoderMode == DecoderMode.SW) DecoderMode.HW else DecoderMode.SW
-                                switchToDecoder(fallbackMode)
+                                switchToDecoder(fallbackMode, isUserAction = false)
                             } else {
                                 _playerState.value = _playerState.value.copy(
                                     isLoading = false,
-                                    errorMessage = "Decoder perangkat keras/lunak Android 8 ini tidak mendukung pemutaran format video ini."
+                                    errorMessage = "Perangkat tidak dapat memuat video ini dengan lancar di mode dekoder saat ini."
                                 )
                             }
                         }
@@ -218,8 +217,7 @@ class MediaPlayerManager(private val context: Context) {
 
                 // If HW decoder fails on low-end device, auto fallback to SW decoder once (only for decoder/codec errors, NOT network/404/403 errors)
                 if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
-                    fallbackAttempted = true
-                    switchToDecoder(DecoderMode.SW)
+                    switchToDecoder(DecoderMode.SW, isUserAction = false)
                 } else {
                     val msg = when {
                         httpStatusCode == 404 -> "Video / URL streaming tidak ditemukan di server (HTTP 404 Not Found)."
@@ -287,6 +285,10 @@ class MediaPlayerManager(private val context: Context) {
 
     fun playMedia(media: VideoMediaItem, startPositionMs: Long = 0L) {
         fallbackAttempted = false
+        playMediaInternal(media, startPositionMs)
+    }
+
+    private fun playMediaInternal(media: VideoMediaItem, startPositionMs: Long = 0L) {
         val player = getPlayer()
         currentMediaItem = media
 
@@ -351,15 +353,21 @@ class MediaPlayerManager(private val context: Context) {
         return ProgressiveMediaSource.Factory(defaultFactory, extractorsFactory).createMediaSource(MediaItem.fromUri(media.uri))
     }
 
-    fun switchToDecoder(decoderMode: DecoderMode) {
+    fun switchToDecoder(decoderMode: DecoderMode, isUserAction: Boolean = false) {
         val player = exoPlayer
         val currentPos = player?.currentPosition ?: 0L
         val currentPlayWhenReady = player?.playWhenReady ?: true
         val media = currentMediaItem
 
+        if (!isUserAction) {
+            fallbackAttempted = true
+        } else {
+            fallbackAttempted = false
+        }
+
         initializePlayer(decoderMode)
         if (media != null) {
-            playMedia(media, currentPos)
+            playMediaInternal(media, currentPos)
             exoPlayer?.playWhenReady = currentPlayWhenReady
         }
     }
@@ -425,7 +433,7 @@ class MediaPlayerManager(private val context: Context) {
             DecoderMode.SW -> DecoderMode.HW_PLUS
             DecoderMode.HW_PLUS -> DecoderMode.HW
         }
-        switchToDecoder(next)
+        switchToDecoder(next, isUserAction = true)
     }
 
     fun selectAudioTrack(trackInfo: PlayerTrackInfo) {

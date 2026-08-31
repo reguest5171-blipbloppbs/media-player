@@ -165,7 +165,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setDecoderMode(mode: DecoderMode) {
-        playerManager.switchToDecoder(mode)
+        playerManager.switchToDecoder(mode, isUserAction = true)
     }
 
     fun cycleDecoder() {
