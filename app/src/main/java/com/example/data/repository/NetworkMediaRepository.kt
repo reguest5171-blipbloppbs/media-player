@@ -95,15 +95,15 @@ class NetworkMediaRepository(
                 formatTag = "HLS M3U8"
             ),
             SampleStreamItem(
-                title = "Sintel (Akamai HLS Adaptive Stream)",
-                url = "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
-                description = "Akamai CDN Multi-bitrate HLS Stream",
-                formatTag = "Akamai HLS"
+                title = "Apple BipBop (16:9 HLS Adaptive)",
+                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
+                description = "Apple HLS Reference Test Pattern 16:9",
+                formatTag = "Apple HLS"
             ),
             SampleStreamItem(
-                title = "Apple BipBop 16x9 Test Pattern",
-                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8",
-                description = "Apple HLS Reference Test Pattern",
+                title = "Apple BipBop (4:3 HLS Adaptive)",
+                url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
+                description = "Apple HLS Reference Test Pattern 4:3",
                 formatTag = "Apple HLS"
             ),
             SampleStreamItem(
@@ -138,7 +138,8 @@ class NetworkMediaRepository(
                 bookmark.url.contains("test-videos.co.uk") ||
                 bookmark.url.contains("jellyfish.media") ||
                 bookmark.url.contains("filesfortesting.com") ||
-                bookmark.url.contains("photoprism")
+                bookmark.url.contains("photoprism") ||
+                bookmark.url.contains("akamaihd.net")
             ) {
                 dao.deleteBookmark(bookmark.id)
             }

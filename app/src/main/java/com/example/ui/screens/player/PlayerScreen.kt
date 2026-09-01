@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -351,10 +352,10 @@ fun PlayerScreen(
                                 Text("Kembali", fontSize = 12.sp)
                             }
                             androidx.compose.material3.OutlinedButton(
-                                onClick = { viewModel.toggleDebugDialog() },
+                                onClick = { viewModel.retryCurrentMedia() },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Debug Info", fontSize = 12.sp)
+                                Text("Coba Lagi", fontSize = 12.sp)
                             }
                             androidx.compose.material3.Button(
                                 onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
@@ -1015,7 +1016,8 @@ fun PlayerScreen(
                 playerState = playerState,
                 onDismiss = { viewModel.setDebugDialogVisible(false) },
                 onSelectDecoderMode = { viewModel.setDecoderMode(it) },
-                onClearLogs = { viewModel.clearDebugLogs() }
+                onClearLogs = { viewModel.clearDebugLogs() },
+                onRefreshDiagnostics = { viewModel.refreshDiagnostics() }
             )
         }
     }
@@ -1026,7 +1028,8 @@ private fun DecoderDebugDialog(
     playerState: com.example.player.PlayerState,
     onDismiss: () -> Unit,
     onSelectDecoderMode: (DecoderMode) -> Unit,
-    onClearLogs: () -> Unit
+    onClearLogs: () -> Unit,
+    onRefreshDiagnostics: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
@@ -1034,14 +1037,14 @@ private fun DecoderDebugDialog(
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E2C)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161622)),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 16.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .padding(20.dp)
+                    .padding(18.dp)
                     .verticalScroll(scrollState)
             ) {
                 // Header
@@ -1055,11 +1058,11 @@ private fun DecoderDebugDialog(
                             imageVector = Icons.Default.BugReport,
                             contentDescription = null,
                             tint = Color(0xFFFFD54F),
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(26.dp)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Debug Dekoder Video",
+                            text = "Debug Dekoder & Terminal",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -1070,7 +1073,7 @@ private fun DecoderDebugDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Decoder Mode Selector Chips
                 Text(
@@ -1096,7 +1099,7 @@ private fun DecoderDebugDialog(
                                             DecoderMode.SW -> Color(0xFFD32F2F)
                                             DecoderMode.HW_PLUS -> Color(0xFF7B1FA2)
                                         }
-                                    } else Color(0xFF2D2D44)
+                                    } else Color(0xFF242436)
                                 )
                                 .clickable { onSelectDecoderMode(mode) }
                                 .padding(vertical = 10.dp),
@@ -1112,59 +1115,83 @@ private fun DecoderDebugDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Information Card
                 Card(
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF12121A)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F17)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        DebugItemRow(label = "Status Loading", value = if (playerState.isLoading) "Memuat (BUFFERING)..." else "Diputar (READY)")
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        DebugItemRow(label = "Perangkat", value = playerState.deviceInfo.ifEmpty { "Android Device" })
+                        val statusStr = when {
+                            playerState.errorMessage != null -> "ERROR ⚠️"
+                            playerState.isLoading -> "BUFFERING (Memuat...)"
+                            playerState.isPlaying -> "PLAYING (Memutar)"
+                            else -> "PAUSED (Dijeda)"
+                        }
+                        DebugItemRow(label = "Status Playback", value = statusStr, isHighlight = playerState.isPlaying)
                         DebugItemRow(label = "Dekoder Video", value = playerState.activeVideoDecoder, isHighlight = true)
                         DebugItemRow(label = "Format Video", value = playerState.videoFormatDetails)
                         DebugItemRow(label = "Dekoder Audio", value = playerState.activeAudioDecoder)
                         DebugItemRow(label = "Format Audio", value = playerState.audioFormatDetails)
+                        val bufferSec = playerState.bufferedPositionMs / 1000
+                        val durSec = playerState.durationMs / 1000
+                        DebugItemRow(label = "Penyangga (Buffer)", value = "${bufferSec}s / ${durSec}s (${if (durSec > 0) (playerState.bufferedPositionMs * 100 / playerState.durationMs) else 0}%)")
+                        if (playerState.estimatedBitrateKbps > 0) {
+                            DebugItemRow(label = "Estimasi Bitrate", value = "${playerState.estimatedBitrateKbps} kbps")
+                        }
+                        if (playerState.droppedFramesCount > 0) {
+                            DebugItemRow(label = "Frame Terlewat (Drop)", value = "${playerState.droppedFramesCount} frames")
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // System MediaCodec List
                 Text(
-                    text = "Dekoder Sistem Terdeteksi (MediaCodecList):",
+                    text = "Daftar MediaCodec Sistem (${playerState.availableSystemDecoders.size} terdeteksi):",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color.Gray
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF12121A)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0F17)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(10.dp)) {
                         if (playerState.availableSystemDecoders.isEmpty()) {
                             Text(
-                                text = "Menunggu pemuatan format video...",
+                                text = "Menunggu inisialisasi MediaCodec...",
                                 fontSize = 12.sp,
                                 color = Color.Gray
                             )
                         } else {
-                            playerState.availableSystemDecoders.forEach { dec ->
+                            playerState.availableSystemDecoders.take(8).forEach { dec ->
                                 Text(
                                     text = "• $dec",
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
                                     color = if (dec.contains("[SW]")) Color(0xFFFF8A80) else Color(0xFF81C784),
-                                    modifier = Modifier.padding(vertical = 2.dp)
+                                    modifier = Modifier.padding(vertical = 1.dp)
+                                )
+                            }
+                            if (playerState.availableSystemDecoders.size > 8) {
+                                Text(
+                                    text = "...dan ${playerState.availableSystemDecoders.size - 8} dekoder lainnya",
+                                    fontSize = 10.sp,
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(top = 2.dp)
                                 )
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Live Event Logs
                 Row(
@@ -1173,11 +1200,17 @@ private fun DecoderDebugDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Log Kejadian Live (Real-Time Logs):",
+                        text = "Terminal Log Kejadian Live:",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.Gray
                     )
                     Row {
+                        IconButton(
+                            onClick = onRefreshDiagnostics,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = Color(0xFF64B5F6), modifier = Modifier.size(18.dp))
+                        }
                         IconButton(
                             onClick = {
                                 val fullLog = playerState.decoderDebugLogs.joinToString("\n")
@@ -1198,10 +1231,10 @@ private fun DecoderDebugDialog(
                 Spacer(modifier = Modifier.height(6.dp))
                 Card(
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0F)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF08080C)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(160.dp)
+                        .height(180.dp)
                 ) {
                     val logScroll = rememberScrollState()
                     Column(
@@ -1211,19 +1244,25 @@ private fun DecoderDebugDialog(
                             .verticalScroll(logScroll)
                     ) {
                         if (playerState.decoderDebugLogs.isEmpty()) {
-                            Text("Belum ada log.", color = Color.DarkGray, fontSize = 11.sp)
+                            Text("Belum ada log kejadian.", color = Color.DarkGray, fontSize = 11.sp)
                         } else {
                             playerState.decoderDebugLogs.forEach { log ->
+                                val color = when {
+                                    log.contains("[ERROR]") || log.contains("[LOAD_ERROR]") || log.contains("Error", ignoreCase = true) -> Color(0xFFFF5252)
+                                    log.contains("[RENDER]") -> Color(0xFF69F0AE)
+                                    log.contains("[DECODER]") -> Color(0xFFFFD54F)
+                                    log.contains("[SWITCH]") || log.contains("[FALLBACK]") -> Color(0xFFFFAB40)
+                                    log.contains("[PERF]") -> Color(0xFFFF80AB)
+                                    log.contains("[SYSTEM]") || log.contains("[ENGINE]") -> Color(0xFF80D8FF)
+                                    log.contains("[FORMAT]") -> Color(0xFFB388FF)
+                                    log.contains("[STATE]") || log.contains("[PLAYING]") -> Color(0xFFA7FFEB)
+                                    else -> Color(0xFFCFD8DC)
+                                }
                                 Text(
                                     text = log,
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace,
-                                    color = when {
-                                        log.contains("Error", ignoreCase = true) -> Color(0xFFFF5252)
-                                        log.contains("Aktif", ignoreCase = true) -> Color(0xFFFFD54F)
-                                        log.contains("SW", ignoreCase = true) -> Color(0xFFFF8A65)
-                                        else -> Color(0xFFB0BEC5)
-                                    },
+                                    color = color,
                                     modifier = Modifier.padding(vertical = 1.dp)
                                 )
                             }

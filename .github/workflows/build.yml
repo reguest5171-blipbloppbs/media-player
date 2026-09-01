@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 1
 
@@ -29,11 +29,26 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle Build Tooling & Cache
-        uses: gradle/actions/setup-gradle@v4
+      - name: Setup Gradle Build Tooling & Smart Cache
+        uses: gradle/actions/setup-gradle@v4.3.0
         with:
           gradle-version: "9.3.1"
           cache-read-only: false
+          gradle-home-cache-cleanup: true
+
+      - name: Multi-Layer Cache (Android Build & Dex Intermediates)
+        uses: actions/cache@v4.2.2
+        with:
+          path: |
+            ~/.gradle/caches/transforms-3
+            ~/.gradle/caches/transforms-4
+            ~/.gradle/caches/jars-9
+            ~/.android/build-cache
+            app/build/intermediates/dex
+            app/build/intermediates/compile_and_runtime_not_namespaced_r_class_jar
+          key: ${{ runner.os }}-android-build-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-android-build-
 
       - name: Prepare Persistent Signing Key for Update Compatibility
         env:
@@ -70,12 +85,22 @@ jobs:
       - name: Build R8 Optimized Release APK (High Speed Parallel Engine)
         run: |
           gradle assembleRelease \
+            -x test \
+            -x testReleaseUnitTest \
+            -x testDebugUnitTest \
+            -x lint \
+            -x lintVitalRelease \
+            -x check \
             --parallel \
+            --max-workers=4 \
             --build-cache \
             --configuration-cache \
-            -Dorg.gradle.jvmargs="-Xmx4096m -XX:+UseParallelGC -Dfile.encoding=UTF-8" \
+            --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx6144m -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:+UnlockExperimentalVMOptions -Dfile.encoding=UTF-8" \
             -Dorg.gradle.parallel=true \
-            -Dorg.gradle.caching=true
+            -Dorg.gradle.caching=true \
+            -Dkotlin.incremental=true \
+            -Dandroid.enableR8.fullMode=true
 
       - name: Collect Release APK
         run: |
@@ -92,8 +117,8 @@ jobs:
             exit 1
           fi
 
-      - name: Upload APK to Artifacts (No Tag / Release Created)
-        uses: actions/upload-artifact@v4
+      - name: Upload APK to Artifacts (Zero-Compression Instant Upload)
+        uses: actions/upload-artifact@v4.6.1
         with:
           name: MediaPlayer-Release-APK
           path: artifacts/MediaPlayer-release-optimized.apk

@@ -72,11 +72,15 @@ data class PlayerState(
     val videoCodecName: String = "Auto",
     val activeVideoDecoder: String = "Belum terdeteksi",
     val activeAudioDecoder: String = "Belum terdeteksi",
-    val videoFormatDetails: String = "-",
-    val audioFormatDetails: String = "-",
+    val videoFormatDetails: String = "Menganalisis stream...",
+    val audioFormatDetails: String = "Menganalisis stream...",
     val availableSystemDecoders: List<String> = emptyList(),
     val decoderDebugLogs: List<String> = emptyList(),
-    val showDebugDialog: Boolean = false
+    val showDebugDialog: Boolean = false,
+    val droppedFramesCount: Int = 0,
+    val estimatedBitrateKbps: Long = 0L,
+    val firstFrameRendered: Boolean = false,
+    val deviceInfo: String = ""
 )
 
 @OptIn(UnstableApi::class)
@@ -87,19 +91,36 @@ class MediaPlayerManager(private val context: Context) {
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
 
+    private var currentMediaItem: VideoMediaItem? = null
+    private var activeDecoderMode: DecoderMode = DecoderMode.HW
+    private var fallbackAttempted: Boolean = false
+
     private val debugLogs = mutableListOf<String>()
 
-    private fun addDebugLog(msg: String) {
+    init {
+        val devInfo = "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})"
+        val systemCodecs = queryAvailableDecoders()
+        addDebugLog("[SYSTEM] Perangkat: $devInfo")
+        addDebugLog("[SYSTEM] Terdeteksi ${systemCodecs.size} MediaCodec di sistem Android")
+        addDebugLog("[ENGINE] MediaPlayer siap dalam mode ${activeDecoderMode.label}")
+        _playerState.value = _playerState.value.copy(
+            deviceInfo = devInfo,
+            availableSystemDecoders = systemCodecs
+        )
+    }
+
+    fun addDebugLog(msg: String) {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
         val logLine = "[$timestamp] $msg"
+        android.util.Log.d("MediaPlayerDebug", logLine)
         synchronized(debugLogs) {
             debugLogs.add(0, logLine)
-            if (debugLogs.size > 80) debugLogs.removeAt(debugLogs.size - 1)
+            if (debugLogs.size > 120) debugLogs.removeAt(debugLogs.size - 1)
         }
         _playerState.value = _playerState.value.copy(decoderDebugLogs = ArrayList(debugLogs))
     }
 
-    private fun queryAvailableDecoders(mimeType: String? = null): List<String> {
+    fun queryAvailableDecoders(mimeType: String? = null): List<String> {
         return try {
             val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
             val result = mutableListOf<String>()
@@ -129,16 +150,64 @@ class MediaPlayerManager(private val context: Context) {
         }
     }
 
-    private var currentMediaItem: VideoMediaItem? = null
-    private var activeDecoderMode: DecoderMode = DecoderMode.HW
-    private var fallbackAttempted: Boolean = false
+    fun refreshDiagnostics() {
+        val systemCodecs = queryAvailableDecoders()
+        addDebugLog("[DIAGNOSTIC] Menyegarkan daftar MediaCodec & Status Player...")
+        val player = exoPlayer
+        if (player != null) {
+            val stateName = when (player.playbackState) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> "UNKNOWN"
+            }
+            addDebugLog("[STATUS] State: $stateName, IsPlaying: ${player.isPlaying}, Buffer: ${player.bufferedPosition}ms / ${player.duration}ms")
+        } else {
+            addDebugLog("[STATUS] Player belum diinisialisasi")
+        }
+        _playerState.value = _playerState.value.copy(availableSystemDecoders = systemCodecs)
+    }
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
+        .addInterceptor { chain ->
+            val original = chain.request()
+            val requestBuilder = original.newBuilder()
+
+            // Standard modern browser User-Agent to avoid anti-hotlink or bot blocks
+            if (original.header("User-Agent") == null) {
+                requestBuilder.header(
+                    "User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                )
+            }
+            if (original.header("Accept") == null) {
+                requestBuilder.header("Accept", "*/*")
+            }
+            if (original.header("Accept-Language") == null) {
+                requestBuilder.header("Accept-Language", "en-US,en;q=0.9,id;q=0.8")
+            }
+            if (original.header("Connection") == null) {
+                requestBuilder.header("Connection", "keep-alive")
+            }
+
+            // Auto-inject Referer & Origin for CDN hotlink protection bypass
+            if (original.header("Referer") == null) {
+                try {
+                    val host = original.url.host
+                    val scheme = original.url.scheme
+                    requestBuilder.header("Referer", "$scheme://$host/")
+                    requestBuilder.header("Origin", "$scheme://$host")
+                } catch (_: Exception) {}
+            }
+
+            chain.proceed(requestBuilder.build())
+        }
         .build()
 
     fun getPlayer(): ExoPlayer {
@@ -166,12 +235,13 @@ class MediaPlayerManager(private val context: Context) {
         // Load control tuned for instant playback start and smooth buffering
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2500,  // min buffer 2.5s (instant start)
-                30000, // max buffer 30s
-                500,   // buffer for playback 0.5s
+                2000,  // min buffer 2s
+                45000, // max buffer 45s
+                250,   // buffer for playback 250ms (instant start)
                 1000   // buffer for rebuffering 1s
             )
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(10000, true)
+            .setPrioritizeTimeOverSizeThresholds(false)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -193,7 +263,7 @@ class MediaPlayerManager(private val context: Context) {
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .build()
 
-        addDebugLog("ExoPlayer diinisialisasi dalam mode $decoderMode")
+        addDebugLog("[PLAYER] ExoPlayer diinisialisasi dalam mode $decoderMode")
 
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(
@@ -204,7 +274,7 @@ class MediaPlayerManager(private val context: Context) {
             ) {
                 val hwTag = if (decoderName.startsWith("OMX.google.", ignoreCase = true) || decoderName.startsWith("c2.android.", ignoreCase = true)) "[SW]" else "[HW]"
                 val label = "$decoderName $hwTag (Init: ${initializationDurationMs}ms)"
-                addDebugLog("Dekoder Video Aktif -> $label")
+                addDebugLog("[DECODER] Video -> $label")
                 _playerState.value = _playerState.value.copy(activeVideoDecoder = label)
             }
 
@@ -214,7 +284,7 @@ class MediaPlayerManager(private val context: Context) {
                 initializedTimestampMs: Long,
                 initializationDurationMs: Long
             ) {
-                addDebugLog("Dekoder Audio Aktif -> $decoderName")
+                addDebugLog("[DECODER] Audio -> $decoderName (Init: ${initializationDurationMs}ms)")
                 _playerState.value = _playerState.value.copy(activeAudioDecoder = decoderName)
             }
 
@@ -223,8 +293,9 @@ class MediaPlayerManager(private val context: Context) {
                 format: Format,
                 decoderReuseEvaluation: DecoderReuseEvaluation?
             ) {
-                val details = "MIME=${format.sampleMimeType ?: "unknown"}, ${format.width}x${format.height}, Codec=${format.codecs ?: "-"}"
-                addDebugLog("Format Video -> $details")
+                val fpsStr = if (format.frameRate > 0) "@${format.frameRate.toInt()}fps" else ""
+                val details = "MIME=${format.sampleMimeType ?: "unknown"}, ${format.width}x${format.height}$fpsStr, Codec=${format.codecs ?: "-"}"
+                addDebugLog("[FORMAT] Video -> $details")
                 val available = queryAvailableDecoders(format.sampleMimeType)
                 _playerState.value = _playerState.value.copy(
                     videoFormatDetails = details,
@@ -238,8 +309,39 @@ class MediaPlayerManager(private val context: Context) {
                 decoderReuseEvaluation: DecoderReuseEvaluation?
             ) {
                 val details = "MIME=${format.sampleMimeType ?: "unknown"}, Ch=${format.channelCount}, ${format.sampleRate}Hz"
-                addDebugLog("Format Audio -> $details")
+                addDebugLog("[FORMAT] Audio -> $details")
                 _playerState.value = _playerState.value.copy(audioFormatDetails = details)
+            }
+
+            override fun onRenderedFirstFrame(
+                eventTime: AnalyticsListener.EventTime,
+                output: Any,
+                renderTimeMs: Long
+            ) {
+                addDebugLog("[RENDER] Frame video pertama berhasil ditampilkan ke layar! 🎬")
+                _playerState.value = _playerState.value.copy(firstFrameRendered = true, isLoading = false)
+            }
+
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long
+            ) {
+                val newCount = _playerState.value.droppedFramesCount + droppedFrames
+                _playerState.value = _playerState.value.copy(droppedFramesCount = newCount)
+                if (droppedFrames > 5) {
+                    addDebugLog("[PERF] Frame Drop: $droppedFrames frames terlewat (${elapsedMs}ms)")
+                }
+            }
+
+            override fun onBandwidthEstimate(
+                eventTime: AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long
+            ) {
+                val kbps = bitrateEstimate / 1000
+                _playerState.value = _playerState.value.copy(estimatedBitrateKbps = kbps)
             }
 
             override fun onPlaybackStateChanged(
@@ -247,20 +349,36 @@ class MediaPlayerManager(private val context: Context) {
                 state: Int
             ) {
                 val stateName = when (state) {
-                    Player.STATE_IDLE -> "IDLE"
-                    Player.STATE_BUFFERING -> "BUFFERING"
-                    Player.STATE_READY -> "READY"
-                    Player.STATE_ENDED -> "ENDED"
+                    Player.STATE_IDLE -> "IDLE (Menganggur)"
+                    Player.STATE_BUFFERING -> "BUFFERING (Memuat penyangga data...)"
+                    Player.STATE_READY -> "READY (Siap memutar)"
+                    Player.STATE_ENDED -> "ENDED (Selesai)"
                     else -> "UNKNOWN ($state)"
                 }
-                addDebugLog("Status Playback -> $stateName")
+                addDebugLog("[STATE] Status Playback -> $stateName")
+            }
+
+            override fun onIsPlayingChanged(
+                eventTime: AnalyticsListener.EventTime,
+                isPlaying: Boolean
+            ) {
+                addDebugLog("[PLAYING] ${if (isPlaying) "Video diputar (Playing)" else "Video dijeda (Paused)"}")
+            }
+
+            override fun onIsLoadingChanged(
+                eventTime: AnalyticsListener.EventTime,
+                isLoading: Boolean
+            ) {
+                if (isLoading) {
+                    addDebugLog("[BUFFER] Mengunduh/membaca data stream...")
+                }
             }
 
             override fun onPlayerError(
                 eventTime: AnalyticsListener.EventTime,
                 error: PlaybackException
             ) {
-                addDebugLog("Analytics Error: ${error.errorCodeName} - ${error.message}")
+                addDebugLog("[ERROR] ${error.errorCodeName} (${error.errorCode}): ${error.message}")
             }
         })
 
@@ -276,29 +394,6 @@ class MediaPlayerManager(private val context: Context) {
                     isLoading = isLoading,
                     durationMs = duration
                 )
-
-                // Watchdog: If player stalls in STATE_BUFFERING for > 4.0s while playWhenReady at start, auto-fallback or report error
-                if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
-                    val targetMedia = currentMediaItem
-                    coroutineScope.launch {
-                        delay(4000L)
-                        if (exoPlayer?.playbackState == Player.STATE_BUFFERING &&
-                            exoPlayer?.playWhenReady == true &&
-                            currentMediaItem == targetMedia &&
-                            _playerState.value.errorMessage == null
-                        ) {
-                            if (!fallbackAttempted) {
-                                val fallbackMode = if (activeDecoderMode == DecoderMode.SW) DecoderMode.HW else DecoderMode.SW
-                                switchToDecoder(fallbackMode, isUserAction = false)
-                            } else {
-                                _playerState.value = _playerState.value.copy(
-                                    isLoading = false,
-                                    errorMessage = "Perangkat tidak dapat memuat video ini dengan lancar di mode dekoder saat ini."
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -306,14 +401,15 @@ class MediaPlayerManager(private val context: Context) {
                     videoWidth = videoSize.width,
                     videoHeight = videoSize.height
                 )
+                addDebugLog("[SIZE] Resolusi: ${videoSize.width}x${videoSize.height}")
             }
 
             override fun onTracksChanged(tracks: Tracks) {
                 updateTracksList(tracks)
+                addDebugLog("[TRACKS] Daftar track diperbarui: ${tracks.groups.size} kelompok track")
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                // Check if the root cause or inner cause is HttpDataSource / network error
                 var isNetworkError = false
                 var httpStatusCode = 0
                 var currentCause: Throwable? = error
@@ -340,8 +436,10 @@ class MediaPlayerManager(private val context: Context) {
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
                 )
 
-                // If HW decoder fails on low-end device, auto fallback to SW decoder once (only for decoder/codec errors, NOT network/404/403 errors)
+                addDebugLog("[ERROR] PlayerError: isDecoderError=$isDecoderError, isNetworkError=$isNetworkError, code=${error.errorCodeName}")
+
                 if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
+                    addDebugLog("[FALLBACK] Dekoder gagal, otomatis beralih ke mode SW...")
                     switchToDecoder(DecoderMode.SW, isUserAction = false)
                 } else {
                     val msg = when {
@@ -417,6 +515,12 @@ class MediaPlayerManager(private val context: Context) {
         val player = getPlayer()
         currentMediaItem = media
 
+        addDebugLog("[LOAD] Memuat Media: '${media.title}' [MIME: ${media.mimeType}, StreamType: ${media.streamType}]")
+        addDebugLog("[LOAD] URI: ${media.uri}")
+        if (startPositionMs > 0) {
+            addDebugLog("[LOAD] Melanjutkan dari posisi: ${startPositionMs}ms")
+        }
+
         try {
             val mediaSource = createMediaSourceFor(media)
             player.setMediaSource(mediaSource)
@@ -431,6 +535,7 @@ class MediaPlayerManager(private val context: Context) {
                 videoCodecName = media.codec
             )
         } catch (e: Exception) {
+            addDebugLog("[LOAD_ERROR] Gagal memuat MediaSource: ${e.message}")
             _playerState.value = _playerState.value.copy(
                 errorMessage = "Gagal memuat video: ${e.localizedMessage ?: "Unknown error"}"
             )
@@ -459,19 +564,36 @@ class MediaPlayerManager(private val context: Context) {
         }
 
         if (media.streamType == StreamType.URL_STREAM || media.path.startsWith("http://") || media.path.startsWith("https://")) {
+            val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
             val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-                .setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
+                .setUserAgent(userAgent)
                 .setDefaultRequestProperties(
                     mapOf(
                         "Accept" to "*/*",
+                        "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
                         "Connection" to "keep-alive"
                     )
                 )
             val defaultFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
-            val mediaItem = MediaItem.fromUri(media.uri)
+
+            val uriStr = media.uri.toString().lowercase()
+            val mediaItemBuilder = MediaItem.Builder().setUri(media.uri)
+
+            when {
+                uriStr.contains(".m3u8") || media.mimeType.contains("mpegurl", ignoreCase = true) || media.mimeType.contains("application/x-mpegurl", ignoreCase = true) -> {
+                    mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                }
+                uriStr.contains(".mpd") || media.mimeType.contains("dash", ignoreCase = true) -> {
+                    mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_MPD)
+                }
+                uriStr.contains(".ism") -> {
+                    mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_SS)
+                }
+            }
+
             return DefaultMediaSourceFactory(context, extractorsFactory)
                 .setDataSourceFactory(defaultFactory)
-                .createMediaSource(mediaItem)
+                .createMediaSource(mediaItemBuilder.build())
         }
 
         val defaultFactory = DefaultDataSource.Factory(context)
@@ -483,6 +605,8 @@ class MediaPlayerManager(private val context: Context) {
         val currentPos = player?.currentPosition ?: 0L
         val currentPlayWhenReady = player?.playWhenReady ?: true
         val media = currentMediaItem
+
+        addDebugLog("[SWITCH] Mengganti mode dekoder ke ${decoderMode.label} (UserAction: $isUserAction)")
 
         if (!isUserAction) {
             fallbackAttempted = true

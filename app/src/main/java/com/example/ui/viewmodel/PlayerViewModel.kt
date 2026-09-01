@@ -184,6 +184,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         playerManager.clearDebugLogs()
     }
 
+    fun refreshDiagnostics() {
+        playerManager.refreshDiagnostics()
+    }
+
+    fun retryCurrentMedia() {
+        val media = _currentMedia.value ?: return
+        val currentPos = playerState.value.currentPositionMs
+        playerManager.playMedia(media, currentPos)
+    }
+
     fun setAspectRatio(mode: AspectRatioMode) {
         playerManager.setAspectRatioMode(mode)
     }
