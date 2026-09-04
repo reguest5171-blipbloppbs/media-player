@@ -24,12 +24,21 @@ import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.video.VideoRendererEventListener
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FFmpegOnlyRenderersFactory
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegVideoRenderer
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegAudioRenderer
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.DecoderMode
 import com.example.data.model.StreamType
@@ -232,16 +241,16 @@ class MediaPlayerManager(private val context: Context) {
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
-        // Load control tuned for instant playback start and smooth buffering
+        // Load control tuned for instant playback start and smooth buffering without getting stuck
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2000,  // min buffer 2s
-                45000, // max buffer 45s
-                250,   // buffer for playback 250ms (instant start)
-                1000   // buffer for rebuffering 1s
+                1500,  // min buffer 1.5s
+                30000, // max buffer 30s
+                200,   // buffer for playback 200ms (instant start like MX Player)
+                500    // buffer for rebuffering 500ms
             )
             .setBackBuffer(10000, true)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -263,7 +272,7 @@ class MediaPlayerManager(private val context: Context) {
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .build()
 
-        addDebugLog("[PLAYER] ExoPlayer diinisialisasi dalam mode $decoderMode")
+        addDebugLog("[PLAYER] ExoPlayer diinisialisasi dalam mode ${decoderMode.label}")
 
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(
@@ -272,7 +281,14 @@ class MediaPlayerManager(private val context: Context) {
                 initializedTimestampMs: Long,
                 initializationDurationMs: Long
             ) {
-                val hwTag = if (decoderName.startsWith("OMX.google.", ignoreCase = true) || decoderName.startsWith("c2.android.", ignoreCase = true)) "[SW]" else "[HW]"
+                val hwTag = when {
+                    decoderName.contains("ffmpeg", ignoreCase = true) ||
+                    decoderName.contains("libvpx", ignoreCase = true) -> "[SW-FFmpeg]"
+                    decoderName.startsWith("OMX.google.", ignoreCase = true) ||
+                    decoderName.startsWith("c2.android.", ignoreCase = true) ||
+                    decoderName.contains("sw", ignoreCase = true) -> "[SW-Android]"
+                    else -> "[HW]"
+                }
                 val label = "$decoderName $hwTag (Init: ${initializationDurationMs}ms)"
                 addDebugLog("[DECODER] Video -> $label")
                 _playerState.value = _playerState.value.copy(activeVideoDecoder = label)
@@ -284,8 +300,15 @@ class MediaPlayerManager(private val context: Context) {
                 initializedTimestampMs: Long,
                 initializationDurationMs: Long
             ) {
-                addDebugLog("[DECODER] Audio -> $decoderName (Init: ${initializationDurationMs}ms)")
-                _playerState.value = _playerState.value.copy(activeAudioDecoder = decoderName)
+                val tag = when {
+                    decoderName.contains("ffmpeg", ignoreCase = true) -> "[SW-FFmpeg]"
+                    decoderName.startsWith("OMX.google.", ignoreCase = true) ||
+                    decoderName.startsWith("c2.android.", ignoreCase = true) -> "[SW-Android]"
+                    else -> "[HW]"
+                }
+                val label = "$decoderName $tag (Init: ${initializationDurationMs}ms)"
+                addDebugLog("[DECODER] Audio -> $label")
+                _playerState.value = _playerState.value.copy(activeAudioDecoder = label)
             }
 
             override fun onVideoInputFormatChanged(
@@ -433,13 +456,15 @@ class MediaPlayerManager(private val context: Context) {
                         error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
-                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
                 )
 
                 addDebugLog("[ERROR] PlayerError: isDecoderError=$isDecoderError, isNetworkError=$isNetworkError, code=${error.errorCodeName}")
 
                 if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
-                    addDebugLog("[FALLBACK] Dekoder gagal, otomatis beralih ke mode SW...")
+                    addDebugLog("[FALLBACK] Format video/audio tidak didukung hardware hp, otomatis beralih ke mode SW (FFmpeg)...")
                     switchToDecoder(DecoderMode.SW, isUserAction = false)
                 } else {
                     val msg = when {
@@ -448,7 +473,7 @@ class MediaPlayerManager(private val context: Context) {
                         httpStatusCode in 500..599 -> "Server video sedang mengalami kendala (HTTP $httpStatusCode Server Error)."
                         httpStatusCode > 0 -> "Gagal memuat URL streaming (HTTP $httpStatusCode)."
                         isNetworkError -> "Gagal menghubungkan ke server streaming. Periksa koneksi internet Anda."
-                        isDecoderError -> "Codec video tidak didukung oleh perangkat keras (Hardware Error). Coba alihkan ke mode SW (Software Decoder)."
+                        isDecoderError -> "Format/codec tidak didukung oleh hardware. Aktifkan mode SW (Software Decoder) untuk memutar via FFmpeg."
                         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "Format kontainer file video tidak didukung."
                         else -> error.localizedMessage ?: "Gagal memutar video (Error ${error.errorCodeName})"
                     }
@@ -469,10 +494,6 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     private fun createRenderersFactory(decoderMode: DecoderMode): DefaultRenderersFactory {
-        val rf = DefaultRenderersFactory(context)
-        rf.setEnableDecoderFallback(true)
-        rf.setAllowedVideoJoiningTimeMs(5000)
-
         val customMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
             val decoders = try {
                 MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
@@ -490,8 +511,7 @@ class MediaPlayerManager(private val context: Context) {
                         it.name.contains("sw", ignoreCase = true) ||
                         it.name.contains("software", ignoreCase = true)
                     }
-                    val hwDecoders = decoders.filterNot { swDecoders.contains(it) }
-                    if (swDecoders.isNotEmpty()) swDecoders + hwDecoders else decoders
+                    if (swDecoders.isNotEmpty()) swDecoders else decoders
                 }
                 DecoderMode.HW, DecoderMode.HW_PLUS -> {
                     val hwDecoders = decoders.filter { it.hardwareAccelerated }
@@ -501,9 +521,179 @@ class MediaPlayerManager(private val context: Context) {
             }
         }
 
-        rf.setMediaCodecSelector(customMediaCodecSelector)
-        rf.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
-        return rf
+        return object : DefaultRenderersFactory(context) {
+            init {
+                setEnableDecoderFallback(true)
+                setAllowedVideoJoiningTimeMs(5000)
+                setMediaCodecSelector(customMediaCodecSelector)
+                setExtensionRendererMode(
+                    if (decoderMode == DecoderMode.SW) EXTENSION_RENDERER_MODE_PREFER
+                    else EXTENSION_RENDERER_MODE_ON
+                )
+            }
+
+            override fun buildVideoRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                eventHandler: android.os.Handler,
+                eventListener: VideoRendererEventListener,
+                allowedVideoJoiningTimeMs: Long,
+                out: java.util.ArrayList<Renderer>
+            ) {
+                when (decoderMode) {
+                    DecoderMode.SW -> {
+                        // MX Player style SW decoder: FFmpeg multi-threaded software decoding first!
+                        try {
+                            val availableCores = Runtime.getRuntime().availableProcessors()
+                            val threads = maxOf(2, minOf(8, availableCores))
+                            out.add(
+                                FfmpegVideoRenderer(
+                                    allowedVideoJoiningTimeMs,
+                                    eventHandler,
+                                    eventListener,
+                                    50,
+                                    threads,
+                                    8,
+                                    8
+                                )
+                            )
+                            addDebugLog("[RENDERER] SW Mode: FfmpegVideoRenderer aktif ($threads threads) 🚀")
+                        } catch (e: Exception) {
+                            addDebugLog("[RENDERER] Fallback basic FfmpegVideoRenderer: ${e.message}")
+                            try {
+                                out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
+                            } catch (_: Exception) {}
+                        }
+
+                        // Secondary fallback: System software decoders
+                        super.buildVideoRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            eventHandler,
+                            eventListener,
+                            allowedVideoJoiningTimeMs,
+                            out
+                        )
+                    }
+                    DecoderMode.HW -> {
+                        // Primary: Hardware accelerated MediaCodec
+                        super.buildVideoRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            eventHandler,
+                            eventListener,
+                            allowedVideoJoiningTimeMs,
+                            out
+                        )
+                        // Fallback: FFmpeg Video Renderer if phone hardware cannot decode format
+                        try {
+                            val availableCores = Runtime.getRuntime().availableProcessors()
+                            val threads = maxOf(2, minOf(6, availableCores))
+                            out.add(
+                                FfmpegVideoRenderer(
+                                    allowedVideoJoiningTimeMs,
+                                    eventHandler,
+                                    eventListener,
+                                    50,
+                                    threads,
+                                    4,
+                                    4
+                                )
+                            )
+                            addDebugLog("[RENDERER] HW Mode: Hardware decoder + FFmpeg fallback siap")
+                        } catch (_: Exception) {}
+                    }
+                    DecoderMode.HW_PLUS -> {
+                        // HW+: Hardware Video with FFmpeg video fallback
+                        super.buildVideoRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            eventHandler,
+                            eventListener,
+                            allowedVideoJoiningTimeMs,
+                            out
+                        )
+                        try {
+                            out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: AudioSink,
+                eventHandler: android.os.Handler,
+                eventListener: AudioRendererEventListener,
+                out: java.util.ArrayList<Renderer>
+            ) {
+                when (decoderMode) {
+                    DecoderMode.SW -> {
+                        // SW: FFmpeg Audio Renderer first (supports AC3, EAC3, DTS, TrueHD, FLAC, Opus, etc.)
+                        try {
+                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                            addDebugLog("[RENDERER] SW Mode: FfmpegAudioRenderer aktif 🔊")
+                        } catch (e: Exception) {
+                            addDebugLog("[RENDERER] Gagal memuat FfmpegAudioRenderer: ${e.message}")
+                        }
+                        super.buildAudioRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            audioSink,
+                            eventHandler,
+                            eventListener,
+                            out
+                        )
+                    }
+                    DecoderMode.HW -> {
+                        // HW: System Audio first, then FFmpeg for unsupported formats (e.g. AC3/DTS)
+                        super.buildAudioRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            audioSink,
+                            eventHandler,
+                            eventListener,
+                            out
+                        )
+                        try {
+                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                        } catch (_: Exception) {}
+                    }
+                    DecoderMode.HW_PLUS -> {
+                        // HW+: In MX Player style, HW+ uses Software FFmpeg for Audio for maximum format compatibility!
+                        try {
+                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                            addDebugLog("[RENDERER] HW+ Mode: FfmpegAudioRenderer aktif 🔊")
+                        } catch (_: Exception) {}
+                        super.buildAudioRenderers(
+                            context,
+                            EXTENSION_RENDERER_MODE_OFF,
+                            mediaCodecSelector,
+                            enableDecoderFallback,
+                            audioSink,
+                            eventHandler,
+                            eventListener,
+                            out
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun playMedia(media: VideoMediaItem, startPositionMs: Long = 0L) {
@@ -597,7 +787,12 @@ class MediaPlayerManager(private val context: Context) {
         }
 
         val defaultFactory = DefaultDataSource.Factory(context)
-        return ProgressiveMediaSource.Factory(defaultFactory, extractorsFactory).createMediaSource(MediaItem.fromUri(media.uri))
+        val mediaItemBuilder = MediaItem.Builder().setUri(media.uri)
+        if (media.mimeType.isNotBlank() && media.mimeType != "video/*") {
+            mediaItemBuilder.setMimeType(media.mimeType)
+        }
+        return DefaultMediaSourceFactory(defaultFactory, extractorsFactory)
+            .createMediaSource(mediaItemBuilder.build())
     }
 
     fun switchToDecoder(decoderMode: DecoderMode, isUserAction: Boolean = false) {
