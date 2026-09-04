@@ -106,11 +106,50 @@ class MediaPlayerManager(private val context: Context) {
 
     private val debugLogs = mutableListOf<String>()
 
+    companion object {
+        private var ffmpegLoaded: Boolean = false
+        private var ffmpegLoadError: String? = null
+
+        init {
+            ensureFfmpegLoaded()
+        }
+
+        fun ensureFfmpegLoaded(): Boolean {
+            if (ffmpegLoaded) return true
+            try {
+                // Pre-load dependent FFmpeg native libraries in topological order for Android 7 & 8 (Oreo) linker compatibility
+                val nativeLibs = listOf("avutil", "swresample", "swscale", "avcodec", "media3ext")
+                for (lib in nativeLibs) {
+                    try {
+                        System.loadLibrary(lib)
+                    } catch (t: Throwable) {
+                        android.util.Log.w("MediaPlayerManager", "loadLibrary($lib): ${t.message}")
+                    }
+                }
+                try {
+                    FfmpegLibrary.setLibraries("avutil", "swresample", "swscale", "avcodec", "media3ext")
+                } catch (_: Throwable) {}
+
+                ffmpegLoaded = FfmpegLibrary.isAvailable()
+                android.util.Log.i("MediaPlayerManager", "FFmpeg native libraries loaded. isAvailable: $ffmpegLoaded")
+                return ffmpegLoaded
+            } catch (t: Throwable) {
+                ffmpegLoadError = t.message
+                android.util.Log.e("MediaPlayerManager", "FFmpeg native load error: ${t.message}", t)
+                return false
+            }
+        }
+
+        fun isFfmpegAvailable(): Boolean = ffmpegLoaded || ensureFfmpegLoaded()
+    }
+
     init {
         val devInfo = "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})"
         val systemCodecs = queryAvailableDecoders()
+        val ffmpegReady = ensureFfmpegLoaded()
         addDebugLog("[SYSTEM] Perangkat: $devInfo")
         addDebugLog("[SYSTEM] Terdeteksi ${systemCodecs.size} MediaCodec di sistem Android")
+        addDebugLog("[FFMPEG] Status Engine FFmpeg SW: ${if (ffmpegReady) "Aktif & Siap (Multi-Threaded) 🚀" else "Gagal memuat native library ($ffmpegLoadError) - Menggunakan OS SW Codecs"}")
         addDebugLog("[ENGINE] MediaPlayer siap dalam mode ${activeDecoderMode.label}")
         _playerState.value = _playerState.value.copy(
             deviceInfo = devInfo,
@@ -231,10 +270,13 @@ class MediaPlayerManager(private val context: Context) {
     @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
         try {
-            exoPlayer?.stop()
-            exoPlayer?.clearMediaItems()
-            exoPlayer?.release()
-        } catch (_: Exception) {}
+            exoPlayer?.let { p ->
+                p.stop()
+                p.clearVideoSurface()
+                p.clearMediaItems()
+                p.release()
+            }
+        } catch (_: Throwable) {}
         exoPlayer = null
 
         activeDecoderMode = decoderMode
@@ -511,7 +553,11 @@ class MediaPlayerManager(private val context: Context) {
                         it.name.contains("sw", ignoreCase = true) ||
                         it.name.contains("software", ignoreCase = true)
                     }
-                    if (swDecoders.isNotEmpty()) swDecoders else decoders
+                    if (swDecoders.isNotEmpty()) {
+                        swDecoders + decoders.filterNot { swDecoders.contains(it) }
+                    } else {
+                        decoders
+                    }
                 }
                 DecoderMode.HW, DecoderMode.HW_PLUS -> {
                     val hwDecoders = decoders.filter { it.hardwareAccelerated }
@@ -545,85 +591,107 @@ class MediaPlayerManager(private val context: Context) {
                 when (decoderMode) {
                     DecoderMode.SW -> {
                         // MX Player style SW decoder: FFmpeg multi-threaded software decoding first!
-                        try {
-                            val availableCores = Runtime.getRuntime().availableProcessors()
-                            val threads = maxOf(2, minOf(8, availableCores))
-                            out.add(
-                                FfmpegVideoRenderer(
-                                    allowedVideoJoiningTimeMs,
-                                    eventHandler,
-                                    eventListener,
-                                    50,
-                                    threads,
-                                    8,
-                                    8
-                                )
-                            )
-                            addDebugLog("[RENDERER] SW Mode: FfmpegVideoRenderer aktif ($threads threads) 🚀")
-                        } catch (e: Exception) {
-                            addDebugLog("[RENDERER] Fallback basic FfmpegVideoRenderer: ${e.message}")
+                        if (isFfmpegAvailable()) {
                             try {
-                                out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
-                            } catch (_: Exception) {}
+                                val availableCores = Runtime.getRuntime().availableProcessors()
+                                val threads = maxOf(2, minOf(4, availableCores))
+                                out.add(
+                                    FfmpegVideoRenderer(
+                                        allowedVideoJoiningTimeMs,
+                                        eventHandler,
+                                        eventListener,
+                                        50,
+                                        threads,
+                                        8,
+                                        8
+                                    )
+                                )
+                                addDebugLog("[RENDERER] SW Mode: FfmpegVideoRenderer aktif ($threads threads) 🚀")
+                            } catch (t: Throwable) {
+                                addDebugLog("[RENDERER] Fallback basic FfmpegVideoRenderer: ${t.message}")
+                                try {
+                                    out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
+                                } catch (t2: Throwable) {
+                                    addDebugLog("[RENDERER] Gagal instansiasi FfmpegVideoRenderer: ${t2.message}")
+                                }
+                            }
+                        } else {
+                            addDebugLog("[RENDERER] FFmpeg library tidak aktif, menggunakan decoder software sistem Android (c2/OMX)")
                         }
 
-                        // Secondary fallback: System software decoders
-                        super.buildVideoRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            eventHandler,
-                            eventListener,
-                            allowedVideoJoiningTimeMs,
-                            out
-                        )
+                        // ALWAYS add Android software/hardware video renderers as reliable secondary fallback!
+                        try {
+                            super.buildVideoRenderers(
+                                context,
+                                EXTENSION_RENDERER_MODE_OFF,
+                                mediaCodecSelector,
+                                enableDecoderFallback,
+                                eventHandler,
+                                eventListener,
+                                allowedVideoJoiningTimeMs,
+                                out
+                            )
+                        } catch (t: Throwable) {
+                            addDebugLog("[RENDERER] Error buildVideoRenderers super: ${t.message}")
+                        }
                     }
                     DecoderMode.HW -> {
                         // Primary: Hardware accelerated MediaCodec
-                        super.buildVideoRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            eventHandler,
-                            eventListener,
-                            allowedVideoJoiningTimeMs,
-                            out
-                        )
-                        // Fallback: FFmpeg Video Renderer if phone hardware cannot decode format
                         try {
-                            val availableCores = Runtime.getRuntime().availableProcessors()
-                            val threads = maxOf(2, minOf(6, availableCores))
-                            out.add(
-                                FfmpegVideoRenderer(
-                                    allowedVideoJoiningTimeMs,
-                                    eventHandler,
-                                    eventListener,
-                                    50,
-                                    threads,
-                                    4,
-                                    4
-                                )
+                            super.buildVideoRenderers(
+                                context,
+                                EXTENSION_RENDERER_MODE_OFF,
+                                mediaCodecSelector,
+                                enableDecoderFallback,
+                                eventHandler,
+                                eventListener,
+                                allowedVideoJoiningTimeMs,
+                                out
                             )
-                            addDebugLog("[RENDERER] HW Mode: Hardware decoder + FFmpeg fallback siap")
-                        } catch (_: Exception) {}
+                        } catch (t: Throwable) {
+                            addDebugLog("[RENDERER] Error buildVideoRenderers HW: ${t.message}")
+                        }
+                        // Fallback: FFmpeg Video Renderer if phone hardware cannot decode format
+                        if (isFfmpegAvailable()) {
+                            try {
+                                val availableCores = Runtime.getRuntime().availableProcessors()
+                                val threads = maxOf(2, minOf(4, availableCores))
+                                out.add(
+                                    FfmpegVideoRenderer(
+                                        allowedVideoJoiningTimeMs,
+                                        eventHandler,
+                                        eventListener,
+                                        50,
+                                        threads,
+                                        4,
+                                        4
+                                    )
+                                )
+                                addDebugLog("[RENDERER] HW Mode: Hardware decoder + FFmpeg fallback siap")
+                            } catch (_: Throwable) {}
+                        }
                     }
                     DecoderMode.HW_PLUS -> {
                         // HW+: Hardware Video with FFmpeg video fallback
-                        super.buildVideoRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            eventHandler,
-                            eventListener,
-                            allowedVideoJoiningTimeMs,
-                            out
-                        )
                         try {
-                            out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
-                        } catch (_: Exception) {}
+                            super.buildVideoRenderers(
+                                context,
+                                EXTENSION_RENDERER_MODE_OFF,
+                                mediaCodecSelector,
+                                enableDecoderFallback,
+                                eventHandler,
+                                eventListener,
+                                allowedVideoJoiningTimeMs,
+                                out
+                            )
+                        } catch (t: Throwable) {
+                            addDebugLog("[RENDERER] Error buildVideoRenderers HW+: ${t.message}")
+                        }
+                        if (isFfmpegAvailable()) {
+                            try {
+                                out.add(FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, 50))
+                            } catch (_: Throwable) {}
+                        }
                     }
                 }
             }
@@ -639,57 +707,52 @@ class MediaPlayerManager(private val context: Context) {
                 out: java.util.ArrayList<Renderer>
             ) {
                 when (decoderMode) {
-                    DecoderMode.SW -> {
-                        // SW: FFmpeg Audio Renderer first (supports AC3, EAC3, DTS, TrueHD, FLAC, Opus, etc.)
-                        try {
-                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
-                            addDebugLog("[RENDERER] SW Mode: FfmpegAudioRenderer aktif 🔊")
-                        } catch (e: Exception) {
-                            addDebugLog("[RENDERER] Gagal memuat FfmpegAudioRenderer: ${e.message}")
+                    DecoderMode.SW, DecoderMode.HW_PLUS -> {
+                        // SW & HW+: FFmpeg Audio Renderer first (supports AC3, EAC3, DTS, TrueHD, FLAC, Opus, etc.)
+                        if (isFfmpegAvailable()) {
+                            try {
+                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                                addDebugLog("[RENDERER] ${decoderMode.label}: FfmpegAudioRenderer aktif 🔊")
+                            } catch (t: Throwable) {
+                                addDebugLog("[RENDERER] Gagal memuat FfmpegAudioRenderer: ${t.message}")
+                            }
                         }
-                        super.buildAudioRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            audioSink,
-                            eventHandler,
-                            eventListener,
-                            out
-                        )
+                        try {
+                            super.buildAudioRenderers(
+                                context,
+                                EXTENSION_RENDERER_MODE_OFF,
+                                mediaCodecSelector,
+                                enableDecoderFallback,
+                                audioSink,
+                                eventHandler,
+                                eventListener,
+                                out
+                            )
+                        } catch (t: Throwable) {
+                            addDebugLog("[RENDERER] Error buildAudioRenderers super: ${t.message}")
+                        }
                     }
                     DecoderMode.HW -> {
                         // HW: System Audio first, then FFmpeg for unsupported formats (e.g. AC3/DTS)
-                        super.buildAudioRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            audioSink,
-                            eventHandler,
-                            eventListener,
-                            out
-                        )
                         try {
-                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
-                        } catch (_: Exception) {}
-                    }
-                    DecoderMode.HW_PLUS -> {
-                        // HW+: In MX Player style, HW+ uses Software FFmpeg for Audio for maximum format compatibility!
-                        try {
-                            out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
-                            addDebugLog("[RENDERER] HW+ Mode: FfmpegAudioRenderer aktif 🔊")
-                        } catch (_: Exception) {}
-                        super.buildAudioRenderers(
-                            context,
-                            EXTENSION_RENDERER_MODE_OFF,
-                            mediaCodecSelector,
-                            enableDecoderFallback,
-                            audioSink,
-                            eventHandler,
-                            eventListener,
-                            out
-                        )
+                            super.buildAudioRenderers(
+                                context,
+                                EXTENSION_RENDERER_MODE_OFF,
+                                mediaCodecSelector,
+                                enableDecoderFallback,
+                                audioSink,
+                                eventHandler,
+                                eventListener,
+                                out
+                            )
+                        } catch (t: Throwable) {
+                            addDebugLog("[RENDERER] Error buildAudioRenderers HW: ${t.message}")
+                        }
+                        if (isFfmpegAvailable()) {
+                            try {
+                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                            } catch (_: Throwable) {}
+                        }
                     }
                 }
             }
@@ -809,10 +872,24 @@ class MediaPlayerManager(private val context: Context) {
             fallbackAttempted = false
         }
 
-        initializePlayer(decoderMode)
-        if (media != null) {
-            playMediaInternal(media, currentPos)
-            exoPlayer?.playWhenReady = currentPlayWhenReady
+        try {
+            initializePlayer(decoderMode)
+            if (media != null) {
+                playMediaInternal(media, currentPos)
+                exoPlayer?.playWhenReady = currentPlayWhenReady
+            }
+        } catch (t: Throwable) {
+            addDebugLog("[SWITCH_ERROR] Gagal beralih ke mode ${decoderMode.label}: ${t.message}")
+            if (decoderMode != DecoderMode.HW) {
+                try {
+                    addDebugLog("[FALLBACK] Mengembalikan ke mode Hardware (HW) agar pemutaran tidak terhenti...")
+                    initializePlayer(DecoderMode.HW)
+                    if (media != null) {
+                        playMediaInternal(media, currentPos)
+                        exoPlayer?.playWhenReady = currentPlayWhenReady
+                    }
+                } catch (_: Throwable) {}
+            }
         }
     }
 

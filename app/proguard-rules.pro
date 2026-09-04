@@ -29,9 +29,20 @@
 -keep class androidx.media3.datasource.** { *; }
 -keep class androidx.media3.common.** { *; }
 -keep class androidx.media3.session.** { *; }
+-keep class androidx.media3.decoder.** { *; }
+-keepclassmembers class androidx.media3.decoder.** { *; }
+-keep class androidx.media3.exoplayer.video.** { *; }
+-keepclassmembers class androidx.media3.exoplayer.video.** { *; }
+-keep class androidx.media3.exoplayer.audio.** { *; }
+-keepclassmembers class androidx.media3.exoplayer.audio.** { *; }
 -keep class androidx.media3.exoplayer.rtsp.** { *; }
 -keep class androidx.media3.exoplayer.hls.** { *; }
 -dontwarn androidx.media3.**
+
+# NextLib FFmpeg Extension (CRITICAL: Prevents R8 Stripping JNI Native Methods & Fields)
+-keep class io.github.anilbeesetti.nextlib.** { *; }
+-keepclassmembers class io.github.anilbeesetti.nextlib.** { *; }
+-dontwarn io.github.anilbeesetti.nextlib.**
 
 # Coil & Coil Video
 -keep class coil.** { *; }

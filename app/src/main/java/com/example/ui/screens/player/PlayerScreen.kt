@@ -274,7 +274,7 @@ fun PlayerScreen(
             update = { playerView ->
                 try {
                     val activePlayer = viewModel.playerManager.getPlayer()
-                    if (playerView.player != activePlayer) {
+                    if (playerView.player !== activePlayer) {
                         playerView.player = activePlayer
                     }
                     when (playerState.aspectRatioMode) {
@@ -283,7 +283,12 @@ fun PlayerScreen(
                         AspectRatioMode.STRETCH -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
                         AspectRatioMode.ORIGINAL -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
                     }
-                } catch (_: Exception) {}
+                } catch (_: Throwable) {}
+            },
+            onRelease = { playerView ->
+                try {
+                    playerView.player = null
+                } catch (_: Throwable) {}
             },
             modifier = Modifier.fillMaxSize()
         )
