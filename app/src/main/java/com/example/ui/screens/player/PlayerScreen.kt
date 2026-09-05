@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -21,6 +22,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.BugReport
@@ -120,6 +123,7 @@ fun PlayerScreen(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
+    val clipboardManager = LocalClipboardManager.current
 
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
     val activePlayer by viewModel.activePlayer.collectAsStateWithLifecycle()
@@ -294,17 +298,93 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Loading Spinner
+        // Loading & Diagnostic HUD Overlay
         if (playerState.isLoading && playerState.errorMessage == null) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(
-                    color = Color.White,
-                    modifier = Modifier.size(52.dp),
-                    strokeWidth = 4.dp
-                )
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xDD12121A)),
+                    modifier = Modifier.widthIn(max = 420.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(46.dp),
+                            strokeWidth = 3.5.dp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "Memuat Video...",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Mode: ${playerState.decoderMode.label} • Buffer: ${playerState.bufferedPositionMs}ms",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB0BEC5),
+                            textAlign = TextAlign.Center
+                        )
+                        if (playerState.activeVideoDecoder.isNotEmpty() && playerState.activeVideoDecoder != "Belum terdeteksi") {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = playerState.activeVideoDecoder,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = Color(0xFFFFD54F),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Quick Actions while loading
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (playerState.decoderMode != DecoderMode.SW) {
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Mode SW ⚙️", fontSize = 11.sp, color = Color(0xFFFF8A80))
+                                }
+                            } else {
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { viewModel.setDecoderMode(DecoderMode.HW) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Mode HW ⚡", fontSize = 11.sp, color = Color(0xFF81D4FA))
+                                }
+                            }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { viewModel.forcePlay() },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                            ) {
+                                Text("Paksa Play ▶", fontSize = 11.sp, color = Color.White)
+                            }
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { viewModel.toggleDebugDialog() },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                            ) {
+                                Text("Log 🐞", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -363,14 +443,48 @@ fun PlayerScreen(
                             ) {
                                 Text("Coba Lagi", fontSize = 12.sp)
                             }
-                            androidx.compose.material3.Button(
-                                onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
-                                modifier = Modifier.weight(1f),
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary
-                                )
+                            if (playerState.decoderMode != DecoderMode.SW) {
+                                androidx.compose.material3.Button(
+                                    onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFD32F2F)
+                                    )
+                                ) {
+                                    Text("Mode SW", fontSize = 12.sp, color = Color.White)
+                                }
+                            } else {
+                                androidx.compose.material3.Button(
+                                    onClick = { viewModel.setDecoderMode(DecoderMode.HW) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF1976D2)
+                                    )
+                                ) {
+                                    Text("Mode HW", fontSize = 12.sp, color = Color.White)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { viewModel.toggleDebugDialog() },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text("Mode SW", fontSize = 12.sp)
+                                Text("Terminal Debug 🐞", fontSize = 11.sp)
+                            }
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = {
+                                    val report = viewModel.getFullDiagnosticReport()
+                                    clipboardManager.setText(AnnotatedString(report))
+                                    Toast.makeText(context, "Laporan diagnostik disalin ke clipboard!", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Salin Log 📋", fontSize = 11.sp)
                             }
                         }
                     }
@@ -1023,7 +1137,14 @@ fun PlayerScreen(
                 onDismiss = { viewModel.setDebugDialogVisible(false) },
                 onSelectDecoderMode = { viewModel.setDecoderMode(it) },
                 onClearLogs = { viewModel.clearDebugLogs() },
-                onRefreshDiagnostics = { viewModel.refreshDiagnostics() }
+                onRefreshDiagnostics = { viewModel.refreshDiagnostics() },
+                onForcePlay = { viewModel.forcePlay() },
+                onReload = { viewModel.reloadCurrentMedia() },
+                onCopyReport = {
+                    val report = viewModel.getFullDiagnosticReport()
+                    clipboardManager.setText(AnnotatedString(report))
+                    Toast.makeText(context, "Laporan diagnostik disalin ke clipboard!", Toast.LENGTH_SHORT).show()
+                }
             )
         }
     }
@@ -1035,7 +1156,10 @@ private fun DecoderDebugDialog(
     onDismiss: () -> Unit,
     onSelectDecoderMode: (DecoderMode) -> Unit,
     onClearLogs: () -> Unit,
-    onRefreshDiagnostics: () -> Unit
+    onRefreshDiagnostics: () -> Unit,
+    onForcePlay: () -> Unit,
+    onReload: () -> Unit,
+    onCopyReport: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
@@ -1076,6 +1200,48 @@ private fun DecoderDebugDialog(
                     }
                     IconButton(onClick = onDismiss) {
                         Text("✕", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Prominent One-Click Copy Diagnostic Report
+                androidx.compose.material3.Button(
+                    onClick = onCopyReport,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Salin Semua Log & Info Lengkap 📋",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Quick Playback Controls (Force Play & Reload)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = onForcePlay,
+                        modifier = Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFD54F))
+                    ) {
+                        Text("▶️ Paksa Play", fontSize = 12.sp)
+                    }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = onReload,
+                        modifier = Modifier.weight(1f),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64B5F6))
+                    ) {
+                        Text("🔄 Muat Ulang", fontSize = 12.sp)
                     }
                 }
 

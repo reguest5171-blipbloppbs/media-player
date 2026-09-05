@@ -29,6 +29,7 @@ import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -273,7 +274,6 @@ class MediaPlayerManager(private val context: Context) {
 
     @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
-        _activePlayer.value = null
         try {
             exoPlayer?.let { p ->
                 p.stop()
@@ -288,15 +288,15 @@ class MediaPlayerManager(private val context: Context) {
 
         val renderersFactory = createRenderersFactory(decoderMode)
 
-        // Load control tuned for instant playback start and smooth buffering without getting stuck
+        // Load control tuned for ultra-fast, responsive start without buffer starvation
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15000, // min buffer 15s
-                50000, // max buffer 50s
-                1000,  // buffer for playback 1s (responsive start, prevents thrashing)
-                2000   // buffer for rebuffering 2s
+                2000,  // min buffer 2s
+                20000, // max buffer 20s
+                300,   // buffer for playback 300ms (instant start!)
+                500    // buffer for rebuffering 500ms
             )
-            .setBackBuffer(10000, true)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -321,6 +321,14 @@ class MediaPlayerManager(private val context: Context) {
         addDebugLog("[PLAYER] ExoPlayer diinisialisasi dalam mode ${decoderMode.label}")
 
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onSurfaceSizeChanged(
+                eventTime: AnalyticsListener.EventTime,
+                width: Int,
+                height: Int
+            ) {
+                addDebugLog("[SURFACE] Ukuran Surface terpasang: ${width}x${height} px")
+            }
+
             override fun onVideoDecoderInitialized(
                 eventTime: AnalyticsListener.EventTime,
                 decoderName: String,
@@ -468,15 +476,12 @@ class MediaPlayerManager(private val context: Context) {
                 if (playbackState == Player.STATE_BUFFERING) {
                     bufferingWatchdogJob?.cancel()
                     bufferingWatchdogJob = coroutineScope.launch {
-                        kotlinx.coroutines.delay(3500)
+                        kotlinx.coroutines.delay(4000)
                         if (_playerState.value.isLoading && exoPlayer?.playbackState == Player.STATE_BUFFERING) {
-                            addDebugLog("[WATCHDOG] Buffer lebih dari 3.5 detik, memicu pemutaran kembali...")
+                            val buf = exoPlayer?.bufferedPosition ?: 0L
+                            val dur = exoPlayer?.duration ?: 0L
+                            addDebugLog("[WATCHDOG] Masih buffering (Buffer: ${buf}ms / ${dur}ms). Mempertahankan pemutaran...")
                             exoPlayer?.play()
-                            if (activeDecoderMode == DecoderMode.SW && !_playerState.value.firstFrameRendered && !fallbackAttempted) {
-                                addDebugLog("[WATCHDOG] Mode SW belum menampilkan gambar, otomatis beralih ke HW...")
-                                fallbackAttempted = true
-                                switchToDecoder(DecoderMode.HW, isUserAction = false)
-                            }
                         }
                     }
                 } else {
@@ -526,31 +531,33 @@ class MediaPlayerManager(private val context: Context) {
                         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
                 )
 
-                addDebugLog("[ERROR] PlayerError: isDecoderError=$isDecoderError, isNetworkError=$isNetworkError, code=${error.errorCodeName}")
-
-                if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
-                    addDebugLog("[FALLBACK] Format video/audio tidak didukung hardware hp, otomatis beralih ke mode SW (FFmpeg)...")
-                    switchToDecoder(DecoderMode.SW, isUserAction = false)
-                } else if (isDecoderError && activeDecoderMode == DecoderMode.SW && !fallbackAttempted) {
-                    addDebugLog("[FALLBACK] Mode SW mengalami kendala dengan format ini, otomatis beralih kembali ke mode HW...")
-                    fallbackAttempted = true
-                    switchToDecoder(DecoderMode.HW, isUserAction = false)
-                } else {
-                    val msg = when {
-                        httpStatusCode == 404 -> "Video / URL streaming tidak ditemukan di server (HTTP 404 Not Found)."
-                        httpStatusCode == 403 -> "Akses streaming ditolak oleh server (HTTP 403 Forbidden). Server membatasi akses URL ini."
-                        httpStatusCode in 500..599 -> "Server video sedang mengalami kendala (HTTP $httpStatusCode Server Error)."
-                        httpStatusCode > 0 -> "Gagal memuat URL streaming (HTTP $httpStatusCode)."
-                        isNetworkError -> "Gagal menghubungkan ke server streaming. Periksa koneksi internet Anda."
-                        isDecoderError -> "Format/codec tidak didukung oleh hardware. Aktifkan mode SW (Software Decoder) untuk memutar via FFmpeg."
-                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "Format kontainer file video tidak didukung."
-                        else -> error.localizedMessage ?: "Gagal memutar video (Error ${error.errorCodeName})"
+                val errorDetails = buildString {
+                    append("[ERROR] ${error.errorCodeName} (${error.errorCode}): ${error.message ?: "Unknown"}")
+                    var cause = error.cause
+                    var depth = 0
+                    while (cause != null && depth < 3) {
+                        append(" -> [Penyebab: ${cause.javaClass.simpleName}: ${cause.message}]")
+                        cause = cause.cause
+                        depth++
                     }
-                    _playerState.value = _playerState.value.copy(
-                        isLoading = false,
-                        errorMessage = msg
-                    )
                 }
+                addDebugLog(errorDetails)
+
+                val msg = when {
+                    httpStatusCode == 404 -> "Video / URL streaming tidak ditemukan di server (HTTP 404 Not Found)."
+                    httpStatusCode == 403 -> "Akses streaming ditolak oleh server (HTTP 403 Forbidden). Server membatasi akses URL ini."
+                    httpStatusCode in 500..599 -> "Server video sedang mengalami kendala (HTTP $httpStatusCode Server Error)."
+                    httpStatusCode > 0 -> "Gagal memuat URL streaming (HTTP $httpStatusCode)."
+                    isNetworkError -> "Gagal menghubungkan ke server streaming. Periksa koneksi internet Anda."
+                    isDecoderError && activeDecoderMode == DecoderMode.HW -> "Codec/format video tidak didukung hardware hp. Silakan beralih ke mode SW (Software/FFmpeg)."
+                    isDecoderError && activeDecoderMode == DecoderMode.SW -> "Dekoder SW (FFmpeg) gagal mengurai format ini. Coba beralih ke HW atau format lain."
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "Format kontainer file video tidak didukung."
+                    else -> error.localizedMessage ?: "Gagal memutar video (Error ${error.errorCodeName})"
+                }
+                _playerState.value = _playerState.value.copy(
+                    isLoading = false,
+                    errorMessage = msg
+                )
             }
         })
 
@@ -739,8 +746,9 @@ class MediaPlayerManager(private val context: Context) {
                         // SW & HW+: FFmpeg Audio Renderer first (supports AC3, EAC3, DTS, TrueHD, FLAC, Opus, etc.)
                         if (isFfmpegAvailable()) {
                             try {
-                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
-                                addDebugLog("[RENDERER] ${decoderMode.label}: FfmpegAudioRenderer aktif 🔊")
+                                val ffmpegSink = DefaultAudioSink.Builder(context).build()
+                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, ffmpegSink))
+                                addDebugLog("[RENDERER] ${decoderMode.label}: FfmpegAudioRenderer aktif (sink terpisah) 🔊")
                             } catch (t: Throwable) {
                                 addDebugLog("[RENDERER] Gagal memuat FfmpegAudioRenderer: ${t.message}")
                             }
@@ -778,7 +786,8 @@ class MediaPlayerManager(private val context: Context) {
                         }
                         if (isFfmpegAvailable()) {
                             try {
-                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, audioSink))
+                                val ffmpegSink = DefaultAudioSink.Builder(context).build()
+                                out.add(FfmpegAudioRenderer(eventHandler, eventListener, ffmpegSink))
                             } catch (_: Throwable) {}
                         }
                     }
@@ -892,11 +901,7 @@ class MediaPlayerManager(private val context: Context) {
 
         addDebugLog("[SWITCH] Mengganti mode dekoder ke ${decoderMode.label} (UserAction: $isUserAction)")
 
-        if (!isUserAction) {
-            fallbackAttempted = true
-        } else {
-            fallbackAttempted = false
-        }
+        fallbackAttempted = !isUserAction
 
         try {
             initializePlayer(decoderMode)
@@ -906,16 +911,9 @@ class MediaPlayerManager(private val context: Context) {
             }
         } catch (t: Throwable) {
             addDebugLog("[SWITCH_ERROR] Gagal beralih ke mode ${decoderMode.label}: ${t.message}")
-            if (decoderMode != DecoderMode.HW) {
-                try {
-                    addDebugLog("[FALLBACK] Mengembalikan ke mode Hardware (HW) agar pemutaran tidak terhenti...")
-                    initializePlayer(DecoderMode.HW)
-                    if (media != null) {
-                        playMediaInternal(media, currentPos)
-                        exoPlayer?.playWhenReady = currentPlayWhenReady
-                    }
-                } catch (_: Throwable) {}
-            }
+            _playerState.value = _playerState.value.copy(
+                errorMessage = "Gagal beralih ke mode ${decoderMode.label}: ${t.localizedMessage ?: t.message}"
+            )
         }
     }
 
@@ -1094,6 +1092,86 @@ class MediaPlayerManager(private val context: Context) {
             debugLogs.clear()
         }
         _playerState.value = _playerState.value.copy(decoderDebugLogs = emptyList())
+    }
+
+    fun forcePlay() {
+        addDebugLog("[CONTROL] Paksa pemutaran (Force Play) dipicu...")
+        exoPlayer?.let { p ->
+            p.playWhenReady = true
+            p.play()
+        }
+    }
+
+    fun reloadCurrentMedia() {
+        val media = currentMediaItem ?: return
+        val pos = exoPlayer?.currentPosition ?: 0L
+        addDebugLog("[CONTROL] Memuat ulang media saat ini dari posisi: ${pos}ms...")
+        playMediaInternal(media, pos)
+    }
+
+    fun getFullDiagnosticReport(): String {
+        val player = exoPlayer
+        val state = _playerState.value
+        val media = currentMediaItem
+
+        val pStateName = when (player?.playbackState) {
+            Player.STATE_IDLE -> "IDLE (Menganggur)"
+            Player.STATE_BUFFERING -> "BUFFERING (Memuat penyangga)"
+            Player.STATE_READY -> "READY (Siap memutar)"
+            Player.STATE_ENDED -> "ENDED (Selesai)"
+            null -> "TIDAK ADA PLAYER"
+            else -> "UNKNOWN (${player.playbackState})"
+        }
+
+        return buildString {
+            appendLine("=== LAPORAN DIAGNOSTIK PEMUTAR VIDEO ===")
+            appendLine("Waktu: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
+            appendLine()
+            appendLine("[1. PERANGKAT & SISTEM]")
+            appendLine("- Perangkat: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
+            appendLine("- Versi Android: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            appendLine("- CPU / ABI: ${Build.SUPPORTED_ABIS.joinToString(", ")}")
+            appendLine("- Core Tersedia: ${Runtime.getRuntime().availableProcessors()}")
+            appendLine()
+            appendLine("[2. STATUS DEKODER & FFMPEG]")
+            appendLine("- Mode Dekoder Dipilih: ${state.decoderMode.label} (${state.decoderMode.name})")
+            appendLine("- FFmpeg NextLib Aktif: ${isFfmpegAvailable()}")
+            appendLine("- FFmpeg Load Error: ${ffmpegLoadError ?: "None"}")
+            appendLine("- Dekoder Video Aktif: ${state.activeVideoDecoder}")
+            appendLine("- Dekoder Audio Aktif: ${state.activeAudioDecoder}")
+            appendLine()
+            appendLine("[3. STATUS EXOPLAYER]")
+            appendLine("- Playback State: $pStateName")
+            appendLine("- Is Playing: ${player?.isPlaying}")
+            appendLine("- Is Loading / Buffering: ${state.isLoading}")
+            appendLine("- Play When Ready: ${player?.playWhenReady}")
+            appendLine("- First Frame Rendered: ${state.firstFrameRendered}")
+            appendLine("- Posisi Saat Ini: ${player?.currentPosition ?: 0}ms / ${player?.duration ?: 0}ms")
+            appendLine("- Penyangga (Buffer): ${player?.bufferedPosition ?: 0}ms")
+            appendLine("- Total Buffer Terisi: ${player?.totalBufferedDuration ?: 0}ms")
+            appendLine("- Frame Terlewat (Dropped): ${state.droppedFramesCount}")
+            appendLine("- Estimasi Bitrate: ${state.estimatedBitrateKbps} kbps")
+            appendLine("- Pesan Error: ${state.errorMessage ?: "Tidak ada error"}")
+            appendLine()
+            appendLine("[4. INFORMASI MEDIA]")
+            appendLine("- Judul: ${media?.title ?: "Tidak ada media"}")
+            appendLine("- URI: ${media?.uri}")
+            appendLine("- Path: ${media?.path}")
+            appendLine("- MIME Type: ${media?.mimeType}")
+            appendLine("- Stream Type: ${media?.streamType}")
+            appendLine("- Detail Format Video: ${state.videoFormatDetails}")
+            appendLine("- Detail Format Audio: ${state.audioFormatDetails}")
+            appendLine()
+            appendLine("[5. LOG AKTIVITAS TERMINAL (${state.decoderDebugLogs.size} baris)]")
+            if (state.decoderDebugLogs.isEmpty()) {
+                appendLine("(Belum ada log tercatat)")
+            } else {
+                state.decoderDebugLogs.forEach { log ->
+                    appendLine(log)
+                }
+            }
+            appendLine("=== AKHIR LAPORAN ===")
+        }
     }
 
     fun release() {

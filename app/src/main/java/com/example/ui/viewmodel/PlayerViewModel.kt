@@ -189,6 +189,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         playerManager.refreshDiagnostics()
     }
 
+    fun forcePlay() {
+        playerManager.forcePlay()
+    }
+
+    fun reloadCurrentMedia() {
+        playerManager.reloadCurrentMedia()
+    }
+
+    fun getFullDiagnosticReport(): String {
+        return playerManager.getFullDiagnosticReport()
+    }
+
     fun retryCurrentMedia() {
         val media = _currentMedia.value ?: return
         val currentPos = playerState.value.currentPositionMs
