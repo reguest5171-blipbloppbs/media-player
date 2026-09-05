@@ -29,16 +29,71 @@ android {
 
   signingConfigs {
     create("release") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val envKeystorePath = System.getenv("KEYSTORE_PATH")
+      val envKeystore = envKeystorePath?.let { file(it) }
+      val customKeystore = file("${rootDir}/keystore/release-key.jks")
+      val legacyKeystore = file("${rootDir}/release-key.jks")
+      val debugKeystore = file("${rootDir}/debug.keystore")
+
+      val targetStore = when {
+        envKeystore != null && envKeystore.exists() -> envKeystore
+        customKeystore.exists() -> customKeystore
+        legacyKeystore.exists() -> legacyKeystore
+        debugKeystore.exists() -> debugKeystore
+        else -> {
+          // If running on clean CI without pre-existing keystore, create one to ensure build succeeds
+          debugKeystore.parentFile?.mkdirs()
+          try {
+            ProcessBuilder(
+              "keytool", "-genkeypair",
+              "-alias", "androiddebugkey",
+              "-keypass", "android",
+              "-keystore", debugKeystore.absolutePath,
+              "-storepass", "android",
+              "-dname", "CN=Android Debug,O=Android,C=US",
+              "-keyalg", "RSA",
+              "-keysize", "2048",
+              "-validity", "10000"
+            ).redirectErrorStream(true).start().waitFor()
+          } catch (_: Throwable) {}
+          debugKeystore
+        }
+      }
+
+      storeFile = targetStore
+      if (targetStore.name.contains("release")) {
+        storePassword = System.getenv("STORE_PASSWORD") ?: "android"
+        keyAlias = System.getenv("KEY_ALIAS") ?: "mediaplayer"
+        keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+      } else {
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val envKeystorePath = System.getenv("KEYSTORE_PATH")
+      val envKeystore = envKeystorePath?.let { file(it) }
+      val customKeystore = file("${rootDir}/keystore/release-key.jks")
+      val debugKeystore = file("${rootDir}/debug.keystore")
+
+      val targetStore = when {
+        envKeystore != null && envKeystore.exists() -> envKeystore
+        customKeystore.exists() -> customKeystore
+        debugKeystore.exists() -> debugKeystore
+        else -> debugKeystore
+      }
+
+      storeFile = targetStore
+      if (targetStore.name.contains("release")) {
+        storePassword = System.getenv("STORE_PASSWORD") ?: "android"
+        keyAlias = System.getenv("KEY_ALIAS") ?: "mediaplayer"
+        keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+      } else {
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
