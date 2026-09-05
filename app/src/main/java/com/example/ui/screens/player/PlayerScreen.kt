@@ -344,6 +344,16 @@ fun PlayerScreen(
                                 textAlign = TextAlign.Center
                             )
                         }
+                        if (playerState.activeAudioDecoder.isNotEmpty() && playerState.activeAudioDecoder != "Belum terdeteksi") {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = playerState.activeAudioDecoder,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = Color(0xFF81C784),
+                                textAlign = TextAlign.Center
+                            )
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Quick Actions while loading
@@ -376,7 +386,7 @@ fun PlayerScreen(
                                 Text("Paksa Play ▶", fontSize = 11.sp, color = Color.White)
                             }
                             androidx.compose.material3.FilledTonalButton(
-                                onClick = { viewModel.toggleDebugDialog() },
+                                onClick = { viewModel.setDebugDialogVisible(true) },
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                             ) {
@@ -1131,22 +1141,23 @@ fun PlayerScreen(
                 }
             }
         }
-        if (playerState.showDebugDialog) {
-            DecoderDebugDialog(
-                playerState = playerState,
-                onDismiss = { viewModel.setDebugDialogVisible(false) },
-                onSelectDecoderMode = { viewModel.setDecoderMode(it) },
-                onClearLogs = { viewModel.clearDebugLogs() },
-                onRefreshDiagnostics = { viewModel.refreshDiagnostics() },
-                onForcePlay = { viewModel.forcePlay() },
-                onReload = { viewModel.reloadCurrentMedia() },
-                onCopyReport = {
-                    val report = viewModel.getFullDiagnosticReport()
-                    clipboardManager.setText(AnnotatedString(report))
-                    Toast.makeText(context, "Laporan diagnostik disalin ke clipboard!", Toast.LENGTH_SHORT).show()
-                }
-            )
-        }
+    }
+
+    if (playerState.showDebugDialog) {
+        DecoderDebugDialog(
+            playerState = playerState,
+            onDismiss = { viewModel.setDebugDialogVisible(false) },
+            onSelectDecoderMode = { viewModel.setDecoderMode(it) },
+            onClearLogs = { viewModel.clearDebugLogs() },
+            onRefreshDiagnostics = { viewModel.refreshDiagnostics() },
+            onForcePlay = { viewModel.forcePlay() },
+            onReload = { viewModel.reloadCurrentMedia() },
+            onCopyReport = {
+                val report = viewModel.getFullDiagnosticReport()
+                clipboardManager.setText(AnnotatedString(report))
+                Toast.makeText(context, "Laporan diagnostik disalin ke clipboard!", Toast.LENGTH_SHORT).show()
+            }
+        )
     }
 }
 
