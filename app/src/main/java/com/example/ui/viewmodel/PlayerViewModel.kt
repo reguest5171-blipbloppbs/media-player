@@ -55,6 +55,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val audioManager = application.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     val playerState: StateFlow<PlayerState> = playerManager.playerState
+    val activePlayer: StateFlow<androidx.media3.exoplayer.ExoPlayer?> = playerManager.activePlayer
 
     private val _currentMedia = MutableStateFlow<VideoMediaItem?>(null)
     val currentMedia: StateFlow<VideoMediaItem?> = _currentMedia.asStateFlow()

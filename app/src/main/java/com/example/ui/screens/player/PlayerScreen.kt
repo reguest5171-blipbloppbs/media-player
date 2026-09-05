@@ -122,6 +122,7 @@ fun PlayerScreen(
     val activity = context as? Activity
 
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
+    val activePlayer by viewModel.activePlayer.collectAsStateWithLifecycle()
     val currentMedia by viewModel.currentMedia.collectAsStateWithLifecycle()
     val controlsVisible by viewModel.controlsVisible.collectAsStateWithLifecycle()
     val isLocked by viewModel.isScreenLocked.collectAsStateWithLifecycle()
@@ -261,10 +262,11 @@ fun PlayerScreen(
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
-                    player = viewModel.playerManager.getPlayer()
+                    player = activePlayer
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                     keepScreenOn = true
+                    setEnableComposeSurfaceSyncWorkaround(true)
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -273,7 +275,6 @@ fun PlayerScreen(
             },
             update = { playerView ->
                 try {
-                    val activePlayer = viewModel.playerManager.getPlayer()
                     if (playerView.player !== activePlayer) {
                         playerView.player = activePlayer
                     }

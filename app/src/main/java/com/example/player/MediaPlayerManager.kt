@@ -97,6 +97,9 @@ class MediaPlayerManager(private val context: Context) {
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var exoPlayer: ExoPlayer? = null
+    private val _activePlayer = MutableStateFlow<ExoPlayer?>(null)
+    val activePlayer: StateFlow<ExoPlayer?> = _activePlayer.asStateFlow()
+
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
 
@@ -269,6 +272,7 @@ class MediaPlayerManager(private val context: Context) {
 
     @Synchronized
     fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
+        _activePlayer.value = null
         try {
             exoPlayer?.let { p ->
                 p.stop()
@@ -508,6 +512,10 @@ class MediaPlayerManager(private val context: Context) {
                 if (isDecoderError && activeDecoderMode != DecoderMode.SW && !fallbackAttempted) {
                     addDebugLog("[FALLBACK] Format video/audio tidak didukung hardware hp, otomatis beralih ke mode SW (FFmpeg)...")
                     switchToDecoder(DecoderMode.SW, isUserAction = false)
+                } else if (isDecoderError && activeDecoderMode == DecoderMode.SW && !fallbackAttempted) {
+                    addDebugLog("[FALLBACK] Mode SW mengalami kendala dengan format ini, otomatis beralih kembali ke mode HW...")
+                    fallbackAttempted = true
+                    switchToDecoder(DecoderMode.HW, isUserAction = false)
                 } else {
                     val msg = when {
                         httpStatusCode == 404 -> "Video / URL streaming tidak ditemukan di server (HTTP 404 Not Found)."
@@ -528,6 +536,7 @@ class MediaPlayerManager(private val context: Context) {
         })
 
         exoPlayer = player
+        _activePlayer.value = player
         _playerState.value = _playerState.value.copy(
             decoderMode = decoderMode,
             errorMessage = null
@@ -594,7 +603,7 @@ class MediaPlayerManager(private val context: Context) {
                         if (isFfmpegAvailable()) {
                             try {
                                 val availableCores = Runtime.getRuntime().availableProcessors()
-                                val threads = maxOf(2, minOf(4, availableCores))
+                                val threads = maxOf(1, minOf(2, availableCores))
                                 out.add(
                                     FfmpegVideoRenderer(
                                         allowedVideoJoiningTimeMs,
@@ -602,8 +611,8 @@ class MediaPlayerManager(private val context: Context) {
                                         eventListener,
                                         50,
                                         threads,
-                                        8,
-                                        8
+                                        4,
+                                        4
                                     )
                                 )
                                 addDebugLog("[RENDERER] SW Mode: FfmpegVideoRenderer aktif ($threads threads) 🚀")
@@ -1071,9 +1080,15 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun release() {
+        _activePlayer.value = null
         try {
-            exoPlayer?.release()
-        } catch (_: Exception) {}
+            exoPlayer?.let { p ->
+                p.stop()
+                p.clearVideoSurface()
+                p.clearMediaItems()
+                p.release()
+            }
+        } catch (_: Throwable) {}
         exoPlayer = null
     }
 }
