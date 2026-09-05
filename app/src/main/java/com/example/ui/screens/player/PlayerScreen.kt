@@ -262,11 +262,10 @@ fun PlayerScreen(
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
-                    player = activePlayer
+                    player = activePlayer ?: viewModel.playerManager.getPlayer()
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                     keepScreenOn = true
-                    setEnableComposeSurfaceSyncWorkaround(true)
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -275,8 +274,9 @@ fun PlayerScreen(
             },
             update = { playerView ->
                 try {
-                    if (playerView.player !== activePlayer) {
-                        playerView.player = activePlayer
+                    val currentPlayer = activePlayer ?: viewModel.playerManager.getPlayer()
+                    if (playerView.player !== currentPlayer) {
+                        playerView.player = currentPlayer
                     }
                     when (playerState.aspectRatioMode) {
                         AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT

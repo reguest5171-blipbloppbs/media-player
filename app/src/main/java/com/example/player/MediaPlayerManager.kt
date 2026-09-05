@@ -106,6 +106,7 @@ class MediaPlayerManager(private val context: Context) {
     private var currentMediaItem: VideoMediaItem? = null
     private var activeDecoderMode: DecoderMode = DecoderMode.HW
     private var fallbackAttempted: Boolean = false
+    private var bufferingWatchdogJob: kotlinx.coroutines.Job? = null
 
     private val debugLogs = mutableListOf<String>()
 
@@ -290,13 +291,12 @@ class MediaPlayerManager(private val context: Context) {
         // Load control tuned for instant playback start and smooth buffering without getting stuck
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                1500,  // min buffer 1.5s
-                30000, // max buffer 30s
-                200,   // buffer for playback 200ms (instant start like MX Player)
-                500    // buffer for rebuffering 500ms
+                15000, // min buffer 15s
+                50000, // max buffer 50s
+                1000,  // buffer for playback 1s (responsive start, prevents thrashing)
+                2000   // buffer for rebuffering 2s
             )
             .setBackBuffer(10000, true)
-            .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -387,6 +387,7 @@ class MediaPlayerManager(private val context: Context) {
                 output: Any,
                 renderTimeMs: Long
             ) {
+                bufferingWatchdogJob?.cancel()
                 addDebugLog("[RENDER] Frame video pertama berhasil ditampilkan ke layar! 🎬")
                 _playerState.value = _playerState.value.copy(firstFrameRendered = true, isLoading = false)
             }
@@ -463,6 +464,24 @@ class MediaPlayerManager(private val context: Context) {
                     isLoading = isLoading,
                     durationMs = duration
                 )
+
+                if (playbackState == Player.STATE_BUFFERING) {
+                    bufferingWatchdogJob?.cancel()
+                    bufferingWatchdogJob = coroutineScope.launch {
+                        kotlinx.coroutines.delay(3500)
+                        if (_playerState.value.isLoading && exoPlayer?.playbackState == Player.STATE_BUFFERING) {
+                            addDebugLog("[WATCHDOG] Buffer lebih dari 3.5 detik, memicu pemutaran kembali...")
+                            exoPlayer?.play()
+                            if (activeDecoderMode == DecoderMode.SW && !_playerState.value.firstFrameRendered && !fallbackAttempted) {
+                                addDebugLog("[WATCHDOG] Mode SW belum menampilkan gambar, otomatis beralih ke HW...")
+                                fallbackAttempted = true
+                                switchToDecoder(DecoderMode.HW, isUserAction = false)
+                            }
+                        }
+                    }
+                } else {
+                    bufferingWatchdogJob?.cancel()
+                }
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -791,10 +810,12 @@ class MediaPlayerManager(private val context: Context) {
                 player.seekTo(startPositionMs)
             }
             player.playWhenReady = true
+            player.play()
 
             _playerState.value = _playerState.value.copy(
                 errorMessage = null,
-                videoCodecName = media.codec
+                videoCodecName = media.codec,
+                firstFrameRendered = false
             )
         } catch (e: Exception) {
             addDebugLog("[LOAD_ERROR] Gagal memuat MediaSource: ${e.message}")
@@ -858,13 +879,9 @@ class MediaPlayerManager(private val context: Context) {
                 .createMediaSource(mediaItemBuilder.build())
         }
 
-        val defaultFactory = DefaultDataSource.Factory(context)
-        val mediaItemBuilder = MediaItem.Builder().setUri(media.uri)
-        if (media.mimeType.isNotBlank() && media.mimeType != "video/*") {
-            mediaItemBuilder.setMimeType(media.mimeType)
-        }
-        return DefaultMediaSourceFactory(defaultFactory, extractorsFactory)
-            .createMediaSource(mediaItemBuilder.build())
+        // Local storage / MediaStore content:// videos:
+        return DefaultMediaSourceFactory(context, extractorsFactory)
+            .createMediaSource(MediaItem.fromUri(media.uri))
     }
 
     fun switchToDecoder(decoderMode: DecoderMode, isUserAction: Boolean = false) {
