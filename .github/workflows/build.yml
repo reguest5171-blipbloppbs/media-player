@@ -65,6 +65,27 @@ jobs:
             echo "STORE_PASSWORD=${STORE_PASS:-android}" >> $GITHUB_ENV
             echo "KEY_ALIAS=${KEY_ALIAS_NAME:-mediaplayer}" >> $GITHUB_ENV
             echo "KEY_PASSWORD=${KEY_PASS:-android}" >> $GITHUB_ENV
+          elif [ -f "keystore/release-key.jks" ]; then
+            echo "Checking existing release keystore in repository..."
+            if keytool -list -keystore "keystore/release-key.jks" -storepass "android" -alias "mediaplayer" > /dev/null 2>&1; then
+              echo "Valid persistent release-key.jks found with alias 'mediaplayer'."
+            else
+              echo "Re-generating release keystore with alias 'mediaplayer'..."
+              rm -f "keystore/release-key.jks"
+              keytool -genkeypair \
+                -alias "mediaplayer" \
+                -keypass "android" \
+                -keystore "keystore/release-key.jks" \
+                -storepass "android" \
+                -dname "CN=MediaPlayer, OU=App, O=AIStudio, L=MountainView, S=CA, C=US" \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000
+            fi
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/keystore/release-key.jks" >> $GITHUB_ENV
+            echo "STORE_PASSWORD=android" >> $GITHUB_ENV
+            echo "KEY_ALIAS=mediaplayer" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=android" >> $GITHUB_ENV
           else
             echo "Generating persistent deterministic release keystore..."
             keytool -genkeypair \
