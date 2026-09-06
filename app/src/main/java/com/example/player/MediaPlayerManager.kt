@@ -441,7 +441,7 @@ class VlcPlayerEngine(
     private var videoWidth: Int = 0
     private var videoHeight: Int = 0
     private var pendingSeekPositionMs: Long = 0L
-    private var attachedTextureView: android.view.TextureView? = null
+    private var attachedSurfaceView: android.view.SurfaceView? = null
     private var currentPfd: android.os.ParcelFileDescriptor? = null
 
     init {
@@ -462,18 +462,18 @@ class VlcPlayerEngine(
         }
     }
 
-    fun attachVout(textureView: android.view.TextureView, width: Int = 0, height: Int = 0) {
+    fun attachVout(surfaceView: android.view.SurfaceView, width: Int = 0, height: Int = 0) {
         try {
-            attachedTextureView = textureView
+            attachedSurfaceView = surfaceView
             val mp = mediaPlayer ?: return
             val vout = mp.vlcVout
-            val w = if (width > 0) width else textureView.width
-            val h = if (height > 0) height else textureView.height
+            val w = if (width > 0) width else surfaceView.width
+            val h = if (height > 0) height else surfaceView.height
             if (w > 0 && h > 0) {
                 vout.setWindowSize(w, h)
             }
             if (!vout.areViewsAttached()) {
-                vout.setVideoView(textureView)
+                vout.setVideoView(surfaceView)
                 vout.attachViews()
                 onDebugLog("[VLC_ENGINE] Video view berhasil di-attach ke LibVLC Native Vout (${w}x${h}px) 📺")
             } else if (w > 0 && h > 0) {
@@ -494,7 +494,7 @@ class VlcPlayerEngine(
 
     fun detachVout() {
         try {
-            attachedTextureView = null
+            attachedSurfaceView = null
             mediaPlayer?.vlcVout?.detachViews()
             onDebugLog("[VLC_ENGINE] Video view di-detach dari LibVLC")
         } catch (_: Exception) {}
@@ -531,17 +531,17 @@ class VlcPlayerEngine(
             val mp = LibVlcMediaPlayer(vlc)
             mediaPlayer = mp
 
-            // Re-attach surface if TextureView is available
-            attachedTextureView?.let { tv ->
+            // Re-attach surface if SurfaceView is available
+            attachedSurfaceView?.let { sv ->
                 try {
                     val vout = mp.vlcVout
-                    val w = tv.width
-                    val h = tv.height
+                    val w = sv.width
+                    val h = sv.height
                     if (w > 0 && h > 0) {
                         vout.setWindowSize(w, h)
                     }
                     if (!vout.areViewsAttached()) {
-                        vout.setVideoView(tv)
+                        vout.setVideoView(sv)
                         vout.attachViews()
                         onDebugLog("[VLC_ENGINE] Surface re-attached ke mediaPlayer baru (${w}x${h}px) 📺")
                     } else if (w > 0 && h > 0) {

@@ -1514,54 +1514,41 @@ fun PlayerSurface(
     if (decoderMode == DecoderMode.VLC) {
         AndroidView(
             factory = { ctx ->
-                android.view.TextureView(ctx).apply {
+                androidx.media3.ui.AspectRatioFrameLayout(ctx).apply {
                     layoutParams = android.widget.FrameLayout.LayoutParams(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                            viewModel.playerManager.vlcPlayerEngine.attachVout(this@apply, w, h)
-                        }
-                        override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                            viewModel.playerManager.vlcPlayerEngine.updateWindowSize(w, h)
-                        }
-                        override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
-                            viewModel.playerManager.vlcPlayerEngine.detachVout()
-                            return true
-                        }
-                        override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                    val surfaceView = android.view.SurfaceView(ctx).apply {
+                        layoutParams = android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.Gravity.CENTER
+                        )
+                        holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                viewModel.playerManager.vlcPlayerEngine.attachVout(this@apply, width, height)
+                            }
+                            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {
+                                viewModel.playerManager.vlcPlayerEngine.updateWindowSize(w, h)
+                            }
+                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                viewModel.playerManager.vlcPlayerEngine.detachVout()
+                            }
+                        })
                     }
+                    addView(surfaceView)
                 }
             },
-            update = { textureView ->
+            update = { aspectRatioFrameLayout ->
                 try {
-                    val viewWidth = textureView.width.toFloat()
-                    val viewHeight = textureView.height.toFloat()
-                    if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-                        val matrixTag = "$videoWidth,$videoHeight,$viewWidth,$viewHeight,$aspectRatioMode"
-                        if (textureView.tag != matrixTag) {
-                            textureView.tag = matrixTag
-                            val matrix = android.graphics.Matrix()
-                            val sx = viewWidth / videoWidth
-                            val sy = viewHeight / videoHeight
-                            when (aspectRatioMode) {
-                                AspectRatioMode.FIT -> {
-                                    val scale = kotlin.math.min(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.CROP -> {
-                                    val scale = kotlin.math.max(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.STRETCH -> {
-                                    matrix.setScale(1f, 1f)
-                                }
-                                AspectRatioMode.ORIGINAL -> {
-                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                            }
-                            textureView.setTransform(matrix)
+                    if (videoWidth > 0 && videoHeight > 0) {
+                        aspectRatioFrameLayout.setAspectRatio(videoWidth.toFloat() / videoHeight.toFloat())
+                        when (aspectRatioMode) {
+                            AspectRatioMode.FIT -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            AspectRatioMode.CROP -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            AspectRatioMode.STRETCH -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                            AspectRatioMode.ORIGINAL -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
                     }
                 } catch (_: Throwable) {}
@@ -1576,52 +1563,39 @@ fun PlayerSurface(
     } else if (decoderMode == DecoderMode.SYSTEM) {
         AndroidView(
             factory = { ctx ->
-                android.view.TextureView(ctx).apply {
+                androidx.media3.ui.AspectRatioFrameLayout(ctx).apply {
                     layoutParams = android.widget.FrameLayout.LayoutParams(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                            viewModel.playerManager.systemPlayerEngine.setSurface(android.view.Surface(st))
-                        }
-                        override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
-                        override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
-                            viewModel.playerManager.systemPlayerEngine.setSurface(null)
-                            return true
-                        }
-                        override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                    val surfaceView = android.view.SurfaceView(ctx).apply {
+                        layoutParams = android.widget.FrameLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.Gravity.CENTER
+                        )
+                        holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                viewModel.playerManager.systemPlayerEngine.setSurface(holder.surface)
+                            }
+                            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, w: Int, h: Int) {}
+                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                viewModel.playerManager.systemPlayerEngine.setSurface(null)
+                            }
+                        })
                     }
+                    addView(surfaceView)
                 }
             },
-            update = { textureView ->
+            update = { aspectRatioFrameLayout ->
                 try {
-                    val viewWidth = textureView.width.toFloat()
-                    val viewHeight = textureView.height.toFloat()
-                    if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-                        val matrixTag = "$videoWidth,$videoHeight,$viewWidth,$viewHeight,$aspectRatioMode"
-                        if (textureView.tag != matrixTag) {
-                            textureView.tag = matrixTag
-                            val matrix = android.graphics.Matrix()
-                            val sx = viewWidth / videoWidth
-                            val sy = viewHeight / videoHeight
-                            when (aspectRatioMode) {
-                                AspectRatioMode.FIT -> {
-                                    val scale = kotlin.math.min(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.CROP -> {
-                                    val scale = kotlin.math.max(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.STRETCH -> {
-                                    matrix.setScale(1f, 1f)
-                                }
-                                AspectRatioMode.ORIGINAL -> {
-                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                            }
-                            textureView.setTransform(matrix)
+                    if (videoWidth > 0 && videoHeight > 0) {
+                        aspectRatioFrameLayout.setAspectRatio(videoWidth.toFloat() / videoHeight.toFloat())
+                        when (aspectRatioMode) {
+                            AspectRatioMode.FIT -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            AspectRatioMode.CROP -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            AspectRatioMode.STRETCH -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                            AspectRatioMode.ORIGINAL -> aspectRatioFrameLayout.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
                     }
                 } catch (_: Throwable) {}
@@ -1657,7 +1631,7 @@ fun PlayerSurface(
                         AspectRatioMode.FIT -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.CROP -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         AspectRatioMode.STRETCH -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-                        AspectRatioMode.ORIGINAL -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        AspectRatioMode.ORIGINAL -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
                     }
                 } catch (_: Throwable) {}
             },
