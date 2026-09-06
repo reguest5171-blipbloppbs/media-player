@@ -34,6 +34,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FFmpegOnlyRenderersFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
@@ -117,12 +118,11 @@ class OptimizedRenderersFactory(
         out: java.util.ArrayList<Renderer>
     ) {
         val ffmpegAvailable = FfmpegLibrary.isAvailable()
-        val availableCores = Runtime.getRuntime().availableProcessors()
-        // Use 4 threads max for stability and memory conservation on mobile devices
-        val threads = kotlin.math.min(availableCores, 4).coerceAtLeast(2)
-        // 16 input buffers and 16 output buffers ensure frame-threading never starves or deadlocks
-        val numInputBuffers = 16
-        val numOutputBuffers = 16
+        // Use 2 threads for immediate frame output without frame-dependency delay
+        val threads = 2
+        // 32 input buffers and 32 output buffers ensure frame queue never starves
+        val numInputBuffers = 32
+        val numOutputBuffers = 32
 
         if (decoderMode == DecoderMode.SW && ffmpegAvailable) {
             // Software mode: FFmpeg video renderer FIRST
@@ -181,6 +181,18 @@ class OptimizedRenderersFactory(
                 }
             }
         }
+    }
+
+    override fun buildAudioSink(
+        context: Context,
+        enableFloatOutput: Boolean,
+        enableAudioTrackPlaybackParams: Boolean
+    ): AudioSink {
+        return DefaultAudioSink.Builder(context)
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .setAudioCapabilities(androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(context))
+            .build()
     }
 
     override fun buildAudioRenderers(
@@ -466,9 +478,26 @@ class MediaPlayerManager(private val context: Context) {
         val mediaSourceFactory = DefaultMediaSourceFactory(context, extractorsFactory)
             .setDataSourceFactory(defaultDataSourceFactory)
 
+        val audioAttributes = androidx.media3.common.AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
+
+        val trackSelector = DefaultTrackSelector(context).apply {
+            setParameters(
+                buildUponParameters()
+                    .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                    .setAllowVideoMixedMimeTypeAdaptiveness(true)
+            )
+        }
+
         val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setTrackSelector(trackSelector)
+            .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .setSeekParameters(SeekParameters.CLOSEST_SYNC)
             .build()
 
