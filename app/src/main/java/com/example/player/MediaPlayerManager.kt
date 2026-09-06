@@ -1,9 +1,11 @@
 package com.example.player
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.media.MediaCodecList
 import android.net.Uri
 import android.os.Build
+import android.view.Surface
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -36,6 +38,10 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.video.VideoRendererEventListener
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer as LibVlcMediaPlayer
+import org.videolan.libvlc.interfaces.IVLCVout
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FFmpegOnlyRenderersFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegVideoRenderer
@@ -118,14 +124,12 @@ class OptimizedRenderersFactory(
         out: java.util.ArrayList<Renderer>
     ) {
         val ffmpegAvailable = FfmpegLibrary.isAvailable()
-        // Use 2 threads for immediate frame output without frame-dependency delay
         val threads = 2
-        // 32 input buffers and 32 output buffers ensure frame queue never starves
         val numInputBuffers = 32
         val numOutputBuffers = 32
 
-        if (decoderMode == DecoderMode.SW && ffmpegAvailable) {
-            // Software mode: FFmpeg video renderer FIRST
+        if (decoderMode == DecoderMode.FFMPEG && ffmpegAvailable) {
+            // Software mode (FFmpeg Engine): FFmpeg video renderer FIRST
             try {
                 val ffmpegVideoRenderer = FfmpegVideoRenderer(
                     allowedVideoJoiningTimeMs,
@@ -152,7 +156,7 @@ class OptimizedRenderersFactory(
                 out
             )
         } else {
-            // HW or HW+: Hardware decoder first
+            // Mode HW, HW+, SW (Google Android): 100% Menggunakan MediaCodec Android Asli (Tanpa FFmpeg)
             super.buildVideoRenderers(
                 context,
                 EXTENSION_RENDERER_MODE_OFF,
@@ -163,36 +167,7 @@ class OptimizedRenderersFactory(
                 allowedVideoJoiningTimeMs,
                 out
             )
-            // If FFmpeg is available, add FfmpegVideoRenderer as fallback
-            if (ffmpegAvailable) {
-                try {
-                    val ffmpegVideoRenderer = FfmpegVideoRenderer(
-                        allowedVideoJoiningTimeMs,
-                        eventHandler,
-                        eventListener,
-                        50,
-                        threads,
-                        numInputBuffers,
-                        numOutputBuffers
-                    )
-                    out.add(ffmpegVideoRenderer)
-                } catch (e: Exception) {
-                    android.util.Log.e("OptimizedRenderers", "Error creating FfmpegVideoRenderer fallback", e)
-                }
-            }
         }
-    }
-
-    override fun buildAudioSink(
-        context: Context,
-        enableFloatOutput: Boolean,
-        enableAudioTrackPlaybackParams: Boolean
-    ): AudioSink {
-        return DefaultAudioSink.Builder(context)
-            .setEnableFloatOutput(enableFloatOutput)
-            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .setAudioCapabilities(androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(context))
-            .build()
     }
 
     override fun buildAudioRenderers(
@@ -207,8 +182,8 @@ class OptimizedRenderersFactory(
     ) {
         val ffmpegAvailable = FfmpegLibrary.isAvailable()
 
-        if (decoderMode == DecoderMode.SW && ffmpegAvailable) {
-            // Software mode: FFmpeg audio renderer FIRST
+        if (decoderMode == DecoderMode.FFMPEG && ffmpegAvailable) {
+            // FFmpeg audio renderer FIRST
             try {
                 val ffmpegAudioRenderer = FfmpegAudioRenderer(
                     eventHandler,
@@ -231,7 +206,7 @@ class OptimizedRenderersFactory(
                 out
             )
         } else {
-            // HW: System Audio first
+            // Mode HW, HW+, SW (Google): 100% Android System Audio Track (Tanpa FFmpeg)
             super.buildAudioRenderers(
                 context,
                 EXTENSION_RENDERER_MODE_OFF,
@@ -242,20 +217,456 @@ class OptimizedRenderersFactory(
                 eventListener,
                 out
             )
-            // Add FFmpeg audio as fallback
-            if (ffmpegAvailable) {
-                try {
-                    val ffmpegAudioRenderer = FfmpegAudioRenderer(
-                        eventHandler,
-                        eventListener,
-                        audioSink
-                    )
-                    out.add(ffmpegAudioRenderer)
-                } catch (e: Exception) {
-                    android.util.Log.e("OptimizedRenderers", "Error creating FfmpegAudioRenderer fallback", e)
+        }
+    }
+}
+
+class SystemPlayerEngine(
+    private val context: Context,
+    private val onStateUpdate: (isPlaying: Boolean, isLoading: Boolean, currentPosMs: Long, durationMs: Long, bufferedPosMs: Long, width: Int, height: Int, firstFrame: Boolean, error: String?) -> Unit,
+    private val onCompletion: () -> Unit,
+    private val onDebugLog: (String) -> Unit
+) {
+    private var mediaPlayer: android.media.MediaPlayer? = null
+    private var surface: Surface? = null
+    private var isPrepared = false
+    private var pendingSeekPositionMs: Long = 0L
+    private var targetPlaybackSpeed: Float = 1.0f
+
+    fun setSurface(newSurface: Surface?) {
+        surface = newSurface
+        try {
+            mediaPlayer?.setSurface(newSurface)
+            if (newSurface != null) {
+                onDebugLog("[SYSTEM_MP] Surface video terhubung ke Mesin MediaPlayer Sistem Android")
+            }
+        } catch (e: Exception) {
+            onDebugLog("[SYSTEM_MP_ERROR] Gagal setSurface: ${e.message}")
+        }
+    }
+
+    fun playMedia(media: VideoMediaItem, startPositionMs: Long) {
+        release()
+        pendingSeekPositionMs = startPositionMs
+        onDebugLog("[SYSTEM_MP] Memulai pemutaran Mesin Bawaan Android (NuPlayer/Stagefright): '${media.title}'")
+        onStateUpdate(false, true, startPositionMs, 0L, 0L, 0, 0, false, null)
+
+        try {
+            val mp = android.media.MediaPlayer()
+            mediaPlayer = mp
+
+            mp.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+
+            surface?.let {
+                if (it.isValid) {
+                    mp.setSurface(it)
                 }
             }
+
+            mp.setDataSource(context, media.uri)
+
+            mp.setOnPreparedListener { player ->
+                isPrepared = true
+                val duration = player.duration.toLong().coerceAtLeast(0L)
+                val width = player.videoWidth
+                val height = player.videoHeight
+                onDebugLog("[SYSTEM_MP_PREPARED] Video siap di Mesin Sistem Android! Durasi: ${duration}ms, Resolusi: ${width}x${height}")
+
+                if (pendingSeekPositionMs > 0) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        player.seekTo(pendingSeekPositionMs, android.media.MediaPlayer.SEEK_CLOSEST)
+                    } else {
+                        player.seekTo(pendingSeekPositionMs.toInt())
+                    }
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && targetPlaybackSpeed != 1.0f) {
+                    try {
+                        player.playbackParams = android.media.PlaybackParams().apply { speed = targetPlaybackSpeed }
+                    } catch (_: Exception) {}
+                }
+
+                player.start()
+                onStateUpdate(true, false, pendingSeekPositionMs, duration, duration, width, height, true, null)
+            }
+
+            mp.setOnVideoSizeChangedListener { _, width, height ->
+                if (width > 0 && height > 0) {
+                    onDebugLog("[SYSTEM_MP] Dimensi video terdeteksi: ${width}x${height}")
+                    val dur = mp.duration.toLong().coerceAtLeast(0L)
+                    val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                    onStateUpdate(mp.isPlaying, false, pos, dur, dur, width, height, true, null)
+                }
+            }
+
+            mp.setOnInfoListener { _, what, _ ->
+                when (what) {
+                    android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START -> {
+                        onDebugLog("[SYSTEM_MP] Frame pertama dirender (MEDIA_INFO_VIDEO_RENDERING_START) 🎉")
+                        val dur = mp.duration.toLong().coerceAtLeast(0L)
+                        val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                        onStateUpdate(mp.isPlaying, false, pos, dur, dur, mp.videoWidth, mp.videoHeight, true, null)
+                        true
+                    }
+                    android.media.MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
+                        onStateUpdate(mp.isPlaying, true, mp.currentPosition.toLong(), mp.duration.toLong(), 0L, mp.videoWidth, mp.videoHeight, true, null)
+                        true
+                    }
+                    android.media.MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
+                        onStateUpdate(mp.isPlaying, false, mp.currentPosition.toLong(), mp.duration.toLong(), 0L, mp.videoWidth, mp.videoHeight, true, null)
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            mp.setOnBufferingUpdateListener { _, percent ->
+                val dur = mp.duration.toLong().coerceAtLeast(0L)
+                val buffered = (dur * percent) / 100
+                val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                onStateUpdate(mp.isPlaying, false, pos, dur, buffered, mp.videoWidth, mp.videoHeight, true, null)
+            }
+
+            mp.setOnCompletionListener {
+                onDebugLog("[SYSTEM_MP] Pemutaran video selesai")
+                onCompletion()
+            }
+
+            mp.setOnErrorListener { _, what, extra ->
+                onDebugLog("[SYSTEM_MP_ERROR] Error pemutaran sistem: what=$what, extra=$extra")
+                val errorMsg = "Mesin Sistem Android mengalami error ($what, $extra). Silakan coba beralih ke Mode HW atau SW."
+                onStateUpdate(false, false, 0L, 0L, 0L, 0, 0, false, errorMsg)
+                true
+            }
+
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            onDebugLog("[SYSTEM_MP_EXCEPTION] Gagal inisialisasi: ${e.message}")
+            onStateUpdate(false, false, 0L, 0L, 0L, 0, 0, false, "Gagal memuat Mesin Sistem: ${e.message}")
         }
+    }
+
+    fun play() {
+        try {
+            if (isPrepared) {
+                mediaPlayer?.start()
+                val pos = mediaPlayer?.currentPosition?.toLong() ?: 0L
+                val dur = mediaPlayer?.duration?.toLong() ?: 0L
+                onStateUpdate(true, false, pos, dur, dur, mediaPlayer?.videoWidth ?: 0, mediaPlayer?.videoHeight ?: 0, true, null)
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun pause() {
+        try {
+            if (isPrepared) {
+                mediaPlayer?.pause()
+                val pos = mediaPlayer?.currentPosition?.toLong() ?: 0L
+                val dur = mediaPlayer?.duration?.toLong() ?: 0L
+                onStateUpdate(false, false, pos, dur, dur, mediaPlayer?.videoWidth ?: 0, mediaPlayer?.videoHeight ?: 0, true, null)
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun togglePlayPause() {
+        if (mediaPlayer?.isPlaying == true) pause() else play()
+    }
+
+    fun seekTo(positionMs: Long) {
+        try {
+            if (isPrepared) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    mediaPlayer?.seekTo(positionMs, android.media.MediaPlayer.SEEK_CLOSEST)
+                } else {
+                    mediaPlayer?.seekTo(positionMs.toInt())
+                }
+                val dur = mediaPlayer?.duration?.toLong() ?: 0L
+                onStateUpdate(mediaPlayer?.isPlaying == true, false, positionMs, dur, dur, mediaPlayer?.videoWidth ?: 0, mediaPlayer?.videoHeight ?: 0, true, null)
+            } else {
+                pendingSeekPositionMs = positionMs
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        targetPlaybackSpeed = speed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && isPrepared) {
+            try {
+                mediaPlayer?.playbackParams = android.media.PlaybackParams().apply { this.speed = speed }
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun setVolume(volume: Float) {
+        try {
+            mediaPlayer?.setVolume(volume, volume)
+        } catch (_: Exception) {}
+    }
+
+    fun pollProgress() {
+        val mp = mediaPlayer ?: return
+        if (isPrepared) {
+            try {
+                val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                val dur = mp.duration.toLong().coerceAtLeast(0L)
+                val isPlaying = mp.isPlaying
+                onStateUpdate(isPlaying, false, pos, dur, dur, mp.videoWidth, mp.videoHeight, true, null)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun release() {
+        isPrepared = false
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.reset()
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+        mediaPlayer = null
+    }
+}
+
+class VlcPlayerEngine(
+    private val context: Context,
+    private val onStateUpdate: (isPlaying: Boolean, isLoading: Boolean, currentPosMs: Long, durationMs: Long, bufferedPosMs: Long, width: Int, height: Int, firstFrame: Boolean, error: String?) -> Unit,
+    private val onCompletion: () -> Unit,
+    private val onDebugLog: (String) -> Unit
+) {
+    private var libVLC: LibVLC? = null
+    private var mediaPlayer: LibVlcMediaPlayer? = null
+    private var isPlaying = false
+    private var durationMs: Long = 0L
+    private var videoWidth: Int = 0
+    private var videoHeight: Int = 0
+    private var pendingSeekPositionMs: Long = 0L
+    private var attachedTextureView: android.view.TextureView? = null
+    private var currentPfd: android.os.ParcelFileDescriptor? = null
+
+    init {
+        try {
+            val options = arrayListOf(
+                "--no-drop-late-frames",
+                "--no-skip-frames",
+                "--network-caching=3000",
+                "-vv"
+            )
+            libVLC = LibVLC(context, options)
+            onDebugLog("[VLC_ENGINE] Mesin LibVLC C++ Native Berhasil Diinisialisasi 🚀")
+        } catch (e: Throwable) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal inisialisasi LibVLC: ${e.message}")
+        }
+    }
+
+    fun attachVout(textureView: android.view.TextureView) {
+        try {
+            attachedTextureView = textureView
+            val mp = mediaPlayer ?: return
+            val vout = mp.vlcVout
+            if (!vout.areViewsAttached()) {
+                vout.setVideoView(textureView)
+                vout.attachViews()
+                onDebugLog("[VLC_ENGINE] Video view berhasil di-attach ke LibVLC Native Vout 📺")
+            }
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] attachVout gagal: ${e.message}")
+        }
+    }
+
+    fun detachVout() {
+        try {
+            attachedTextureView = null
+            mediaPlayer?.vlcVout?.detachViews()
+            onDebugLog("[VLC_ENGINE] Video view di-detach dari LibVLC")
+        } catch (_: Exception) {}
+    }
+
+    fun playMedia(mediaItem: VideoMediaItem, startPositionMs: Long = 0L) {
+        pendingSeekPositionMs = startPositionMs
+        onDebugLog("[VLC_ENGINE] Memulai LibVLC SW C++ Engine: '${mediaItem.title}' [Start: ${startPositionMs}ms]")
+        onStateUpdate(false, true, startPositionMs, 0L, 0L, 0, 0, false, null)
+
+        try {
+            val vlc = libVLC ?: run {
+                val opts = arrayListOf("--no-drop-late-frames", "--network-caching=3000")
+                LibVLC(context, opts).also { libVLC = it }
+            }
+
+            try {
+                mediaPlayer?.stop()
+                mediaPlayer?.vlcVout?.detachViews()
+                mediaPlayer?.release()
+            } catch (_: Throwable) {}
+
+            try {
+                currentPfd?.close()
+            } catch (_: Throwable) {}
+            currentPfd = null
+
+            val mp = LibVlcMediaPlayer(vlc)
+            mediaPlayer = mp
+
+            // Re-attach surface if TextureView is available
+            attachedTextureView?.let { tv ->
+                try {
+                    val vout = mp.vlcVout
+                    if (!vout.areViewsAttached()) {
+                        vout.setVideoView(tv)
+                        vout.attachViews()
+                        onDebugLog("[VLC_ENGINE] Surface re-attached ke mediaPlayer baru 📺")
+                    }
+                } catch (e: Throwable) {
+                    onDebugLog("[VLC_ENGINE_ERROR] Re-attach surface gagal: ${e.message}")
+                }
+            }
+
+            val media = try {
+                if (mediaItem.uri.scheme == "content" || mediaItem.uri.scheme == "file") {
+                    val pfd = try { context.contentResolver.openFileDescriptor(mediaItem.uri, "r") } catch (_: Throwable) { null }
+                    if (pfd != null) {
+                        currentPfd = pfd
+                        Media(vlc, pfd.fileDescriptor)
+                    } else {
+                        Media(vlc, mediaItem.uri)
+                    }
+                } else {
+                    Media(vlc, mediaItem.uri)
+                }
+            } catch (_: Throwable) {
+                Media(vlc, mediaItem.uri)
+            }
+
+            // HW acceleration automatic fallback to SW in VLC C++
+            media.setHWDecoderEnabled(false, false)
+            media.addOption(":file-caching=3000")
+            media.addOption(":network-caching=3000")
+            media.addOption(":clock-jitter=0")
+            media.addOption(":clock-synchro=0")
+            
+            mp.media = media
+            media.release()
+
+            mp.setEventListener { event ->
+                when (event.type) {
+                    LibVlcMediaPlayer.Event.Opening -> {
+                        onDebugLog("[VLC_EVENT] Opening stream...")
+                        onStateUpdate(false, true, 0L, 0L, 0L, videoWidth, videoHeight, false, null)
+                    }
+                    LibVlcMediaPlayer.Event.Playing -> {
+                        isPlaying = true
+                        onDebugLog("[VLC_EVENT] Playing (LibVLC C++ SW Decoding Active) 🟢")
+                        if (pendingSeekPositionMs > 0) {
+                            mp.time = pendingSeekPositionMs
+                            pendingSeekPositionMs = 0L
+                        }
+                        val dur = mp.length.coerceAtLeast(0L)
+                        val pos = mp.time.coerceAtLeast(0L)
+                        onStateUpdate(true, false, pos, dur, dur, videoWidth, videoHeight, true, null)
+                    }
+                    LibVlcMediaPlayer.Event.Paused -> {
+                        isPlaying = false
+                        val dur = mp.length.coerceAtLeast(0L)
+                        val pos = mp.time.coerceAtLeast(0L)
+                        onStateUpdate(false, false, pos, dur, dur, videoWidth, videoHeight, true, null)
+                    }
+                    LibVlcMediaPlayer.Event.Stopped -> {
+                        isPlaying = false
+                        onStateUpdate(false, false, 0L, durationMs, durationMs, videoWidth, videoHeight, false, null)
+                    }
+                    LibVlcMediaPlayer.Event.EndReached -> {
+                        isPlaying = false
+                        onCompletion()
+                    }
+                    LibVlcMediaPlayer.Event.EncounteredError -> {
+                        isPlaying = false
+                        onDebugLog("[VLC_EVENT_ERROR] LibVLC menemukan error pada media stream")
+                        onStateUpdate(false, false, 0L, 0L, 0L, 0, 0, false, "LibVLC Engine Error pada decoding stream")
+                    }
+                    LibVlcMediaPlayer.Event.Vout -> {
+                        val tracks = mp.currentVideoTrack
+                        if (tracks != null) {
+                            videoWidth = tracks.width
+                            videoHeight = tracks.height
+                            onDebugLog("[VLC_EVENT_VOUT] Resolusi terdeteksi oleh LibVLC: ${videoWidth}x${videoHeight}")
+                        }
+                    }
+                    LibVlcMediaPlayer.Event.TimeChanged -> {
+                        val dur = mp.length.coerceAtLeast(0L)
+                        val pos = mp.time.coerceAtLeast(0L)
+                        durationMs = dur
+                        onStateUpdate(isPlaying, false, pos, dur, dur, videoWidth, videoHeight, true, null)
+                    }
+                }
+            }
+
+            mp.play()
+        } catch (e: Throwable) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal memutar di LibVLC: ${e.message}")
+            onStateUpdate(false, false, 0L, 0L, 0L, 0, 0, false, "Gagal memuat video di LibVLC: ${e.message}")
+        }
+    }
+
+    fun play() {
+        try {
+            mediaPlayer?.play()
+            isPlaying = true
+        } catch (_: Exception) {}
+    }
+
+    fun pause() {
+        try {
+            mediaPlayer?.pause()
+            isPlaying = false
+        } catch (_: Exception) {}
+    }
+
+    fun togglePlayPause() {
+        if (isPlaying) pause() else play()
+    }
+
+    fun seekTo(positionMs: Long) {
+        try {
+            mediaPlayer?.time = positionMs
+            val dur = mediaPlayer?.length ?: durationMs
+            onStateUpdate(isPlaying, false, positionMs, dur, dur, videoWidth, videoHeight, true, null)
+        } catch (_: Exception) {}
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        try {
+            mediaPlayer?.setRate(speed)
+        } catch (_: Exception) {}
+    }
+
+    fun setVolume(volume: Float) {
+        try {
+            val vlcVol = (volume * 100).toInt().coerceIn(0, 100)
+            mediaPlayer?.setVolume(vlcVol)
+        } catch (_: Exception) {}
+    }
+
+    fun pollProgress() {
+        val mp = mediaPlayer ?: return
+        try {
+            val pos = mp.time.coerceAtLeast(0L)
+            val dur = mp.length.coerceAtLeast(0L)
+            onStateUpdate(mp.isPlaying, false, pos, dur, dur, videoWidth, videoHeight, true, null)
+        } catch (_: Exception) {}
+    }
+
+    fun release() {
+        try {
+            detachVout()
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+            currentPfd?.close()
+            currentPfd = null
+        } catch (_: Exception) {}
     }
 }
 
@@ -269,12 +680,58 @@ class MediaPlayerManager(private val context: Context) {
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
 
+    private val debugLogs = mutableListOf<String>()
+
     private var currentMediaItem: VideoMediaItem? = null
     private var activeDecoderMode: DecoderMode = DecoderMode.HW
     private var fallbackAttempted: Boolean = false
     private var bufferingWatchdogJob: kotlinx.coroutines.Job? = null
 
-    private val debugLogs = mutableListOf<String>()
+    val systemPlayerEngine = SystemPlayerEngine(
+        context = context,
+        onStateUpdate = { isPlaying, isLoading, currentPos, duration, buffered, width, height, firstFrame, error ->
+            _playerState.value = _playerState.value.copy(
+                isPlaying = isPlaying,
+                isLoading = isLoading,
+                currentPositionMs = currentPos,
+                durationMs = duration,
+                bufferedPositionMs = buffered,
+                videoWidth = if (width > 0) width else _playerState.value.videoWidth,
+                videoHeight = if (height > 0) height else _playerState.value.videoHeight,
+                firstFrameRendered = firstFrame || _playerState.value.firstFrameRendered,
+                errorMessage = error
+            )
+        },
+        onCompletion = {
+            _playerState.value = _playerState.value.copy(isPlaying = false)
+        },
+        onDebugLog = { log ->
+            addDebugLog(log)
+        }
+    )
+
+    val vlcPlayerEngine = VlcPlayerEngine(
+        context = context,
+        onStateUpdate = { isPlaying, isLoading, currentPos, duration, buffered, width, height, firstFrame, error ->
+            _playerState.value = _playerState.value.copy(
+                isPlaying = isPlaying,
+                isLoading = isLoading,
+                currentPositionMs = currentPos,
+                durationMs = duration,
+                bufferedPositionMs = buffered,
+                videoWidth = if (width > 0) width else _playerState.value.videoWidth,
+                videoHeight = if (height > 0) height else _playerState.value.videoHeight,
+                firstFrameRendered = firstFrame || _playerState.value.firstFrameRendered,
+                errorMessage = error
+            )
+        },
+        onCompletion = {
+            _playerState.value = _playerState.value.copy(isPlaying = false)
+        },
+        onDebugLog = { log ->
+            addDebugLog(log)
+        }
+    )
 
     companion object {
         private var ffmpegLoaded: Boolean = false
@@ -331,11 +788,12 @@ class MediaPlayerManager(private val context: Context) {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
         val logLine = "[$timestamp] $msg"
         android.util.Log.d("MediaPlayerDebug", logLine)
-        synchronized(debugLogs) {
-            debugLogs.add(0, logLine)
-            if (debugLogs.size > 120) debugLogs.removeAt(debugLogs.size - 1)
+        val logs = debugLogs ?: return
+        synchronized(logs) {
+            logs.add(0, logLine)
+            if (logs.size > 120) logs.removeAt(logs.size - 1)
         }
-        _playerState.value = _playerState.value.copy(decoderDebugLogs = ArrayList(debugLogs))
+        _playerState?.value = _playerState?.value?.copy(decoderDebugLogs = ArrayList(logs)) ?: return
     }
 
     fun queryAvailableDecoders(mimeType: String? = null): List<String> {
@@ -774,12 +1232,13 @@ class MediaPlayerManager(private val context: Context) {
 
             when (decoderMode) {
                 DecoderMode.SW -> {
+                    // Google Android Software Decoders (pure Android OS built-in software decoders)
                     val swDecoders = decoders.filter {
-                        !it.hardwareAccelerated ||
                         it.name.startsWith("c2.android.", ignoreCase = true) ||
                         it.name.startsWith("OMX.google.", ignoreCase = true) ||
                         it.name.contains("sw", ignoreCase = true) ||
-                        it.name.contains("software", ignoreCase = true)
+                        it.name.contains("software", ignoreCase = true) ||
+                        !it.hardwareAccelerated
                     }
                     if (swDecoders.isNotEmpty()) {
                         swDecoders + decoders.filterNot { swDecoders.contains(it) }
@@ -788,30 +1247,30 @@ class MediaPlayerManager(private val context: Context) {
                     }
                 }
                 DecoderMode.HW, DecoderMode.HW_PLUS -> {
-                    val hwDecoders = decoders.filter { it.hardwareAccelerated }
-                    val swDecoders = decoders.filterNot { it.hardwareAccelerated }
+                    // Prioritize hardware accelerated decoders (e.g. OMX.MTK.VIDEO.DECODER.HEVC on Oppo Helio P35)
+                    val hwDecoders = decoders.filter {
+                        it.hardwareAccelerated ||
+                        it.name.startsWith("OMX.MTK.", ignoreCase = true) ||
+                        it.name.startsWith("OMX.qcom.", ignoreCase = true) ||
+                        it.name.startsWith("OMX.Exynos.", ignoreCase = true) ||
+                        it.name.startsWith("c2.mtk.", ignoreCase = true) ||
+                        it.name.startsWith("c2.qcom.", ignoreCase = true)
+                    }
+                    val swDecoders = decoders.filterNot { hwDecoders.contains(it) }
                     if (hwDecoders.isNotEmpty()) hwDecoders + swDecoders else decoders
                 }
+                DecoderMode.FFMPEG, DecoderMode.SYSTEM, DecoderMode.VLC -> decoders
             }
         }
 
         val factory = OptimizedRenderersFactory(context, decoderMode, customMediaCodecSelector)
-
-        val ffmpegReady = isFfmpegAvailable()
-        if (ffmpegReady) {
-            when (decoderMode) {
-                DecoderMode.SW -> {
-                    addDebugLog("[RENDERER] Mode SW: Optimized SW Renderers (FFmpeg Video + Audio 16-Buffer Queue) 🚀")
-                }
-                DecoderMode.HW -> {
-                    addDebugLog("[RENDERER] Mode HW: Optimized HW Renderers (Hardware Akselerasi + FFmpeg Fallback 16-Buffer Queue) ⚡")
-                }
-                DecoderMode.HW_PLUS -> {
-                    addDebugLog("[RENDERER] Mode HW+: Optimized HW+ Renderers (Hardware Plus + FFmpeg Fallback) ⚡+")
-                }
-            }
-        } else {
-            addDebugLog("[RENDERER] FFmpeg library tidak aktif, menggunakan decoder internal Android")
+        when (decoderMode) {
+            DecoderMode.HW -> addDebugLog("[RENDERER] Mode HW: Pure Hardware MediaCodec (Akselerasi Chipset Asli - Cepat & Ringan) ⚡")
+            DecoderMode.VLC -> addDebugLog("[RENDERER] Mode VLC: LibVLC C++ Native Engine (Pemutar HEVC 10-bit & Multi-Channel) 🚀")
+            DecoderMode.HW_PLUS -> addDebugLog("[RENDERER] Mode HW+: Enhanced Hardware MediaCodec ⚡+")
+            DecoderMode.SW -> addDebugLog("[RENDERER] Mode SW: Google Android OS SW Decoder (Tanpa FFmpeg) ⚙️")
+            DecoderMode.FFMPEG -> addDebugLog("[RENDERER] Mode FFmpeg: FFmpeg Software Engine 🎞️")
+            DecoderMode.SYSTEM -> addDebugLog("[RENDERER] Mode Sistem: Android Native MediaPlayer (NuPlayer/Stagefright OS) 🏛️")
         }
 
         return factory
@@ -819,7 +1278,56 @@ class MediaPlayerManager(private val context: Context) {
 
     fun playMedia(media: VideoMediaItem, startPositionMs: Long = 0L) {
         fallbackAttempted = false
-        playMediaInternal(media, startPositionMs)
+        currentMediaItem = media
+        try {
+            when (activeDecoderMode) {
+                DecoderMode.SYSTEM -> {
+                    try {
+                        exoPlayer?.stop()
+                        exoPlayer?.clearVideoSurface()
+                        exoPlayer?.release()
+                    } catch (_: Throwable) {}
+                    exoPlayer = null
+                    _activePlayer.value = null
+                    vlcPlayerEngine.release()
+                    _playerState.value = _playerState.value.copy(
+                        decoderMode = DecoderMode.SYSTEM,
+                        errorMessage = null,
+                        videoCodecName = media.codec,
+                        firstFrameRendered = false
+                    )
+                    systemPlayerEngine.playMedia(media, startPositionMs)
+                }
+                DecoderMode.VLC -> {
+                    try {
+                        exoPlayer?.stop()
+                        exoPlayer?.clearVideoSurface()
+                        exoPlayer?.release()
+                    } catch (_: Throwable) {}
+                    exoPlayer = null
+                    _activePlayer.value = null
+                    systemPlayerEngine.release()
+                    _playerState.value = _playerState.value.copy(
+                        decoderMode = DecoderMode.VLC,
+                        errorMessage = null,
+                        videoCodecName = media.codec,
+                        firstFrameRendered = false
+                    )
+                    vlcPlayerEngine.playMedia(media, startPositionMs)
+                }
+                else -> {
+                    systemPlayerEngine.release()
+                    vlcPlayerEngine.release()
+                    playMediaInternal(media, startPositionMs)
+                }
+            }
+        } catch (e: Throwable) {
+            addDebugLog("[PLAY_ERROR] Error memutar video: ${e.message}")
+            _playerState.value = _playerState.value.copy(
+                isLoading = false,
+                errorMessage = "Gagal memutar video: ${e.localizedMessage ?: "Unknown error"}"
+            )
+        }
     }
 
     private fun playMediaInternal(media: VideoMediaItem, startPositionMs: Long = 0L) {
@@ -916,20 +1424,56 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun switchToDecoder(decoderMode: DecoderMode, isUserAction: Boolean = false) {
-        val player = exoPlayer
-        val currentPos = player?.currentPosition ?: 0L
-        val currentPlayWhenReady = player?.playWhenReady ?: true
+        val currentPos = when (activeDecoderMode) {
+            DecoderMode.SYSTEM, DecoderMode.VLC -> _playerState.value.currentPositionMs
+            else -> exoPlayer?.currentPosition ?: _playerState.value.currentPositionMs
+        }
+        val currentPlayWhenReady = _playerState.value.isPlaying
         val media = currentMediaItem
 
-        addDebugLog("[SWITCH] Mengganti mode dekoder ke ${decoderMode.label} (UserAction: $isUserAction)")
+        addDebugLog("[SWITCH] Mengganti mode dekoder ke ${decoderMode.label} (UserAction: $isUserAction, Posisi: ${currentPos}ms)")
 
         fallbackAttempted = !isUserAction
+        activeDecoderMode = decoderMode
+        _playerState.value = _playerState.value.copy(
+            decoderMode = decoderMode,
+            errorMessage = null,
+            isLoading = true
+        )
 
         try {
-            initializePlayer(decoderMode)
-            if (media != null) {
-                playMediaInternal(media, currentPos)
-                exoPlayer?.playWhenReady = currentPlayWhenReady
+            when (decoderMode) {
+                DecoderMode.SYSTEM -> {
+                    exoPlayer?.stop()
+                    exoPlayer?.clearVideoSurface()
+                    exoPlayer?.release()
+                    exoPlayer = null
+                    _activePlayer.value = null
+                    vlcPlayerEngine.release()
+                    if (media != null) {
+                        systemPlayerEngine.playMedia(media, currentPos)
+                    }
+                }
+                DecoderMode.VLC -> {
+                    exoPlayer?.stop()
+                    exoPlayer?.clearVideoSurface()
+                    exoPlayer?.release()
+                    exoPlayer = null
+                    _activePlayer.value = null
+                    systemPlayerEngine.release()
+                    if (media != null) {
+                        vlcPlayerEngine.playMedia(media, currentPos)
+                    }
+                }
+                else -> {
+                    systemPlayerEngine.release()
+                    vlcPlayerEngine.release()
+                    initializePlayer(decoderMode)
+                    if (media != null) {
+                        playMediaInternal(media, currentPos)
+                        exoPlayer?.playWhenReady = currentPlayWhenReady
+                    }
+                }
             }
         } catch (t: Throwable) {
             addDebugLog("[SWITCH_ERROR] Gagal beralih ke mode ${decoderMode.label}: ${t.message}")
@@ -940,41 +1484,64 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun play() {
-        exoPlayer?.play()
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.play()
+            DecoderMode.VLC -> vlcPlayerEngine.play()
+            else -> exoPlayer?.play()
+        }
     }
 
     fun pause() {
-        exoPlayer?.pause()
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.pause()
+            DecoderMode.VLC -> vlcPlayerEngine.pause()
+            else -> exoPlayer?.pause()
+        }
     }
 
     fun togglePlayPause() {
-        val player = exoPlayer ?: return
-        if (player.isPlaying) {
-            player.pause()
-        } else {
-            player.play()
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.togglePlayPause()
+            DecoderMode.VLC -> vlcPlayerEngine.togglePlayPause()
+            else -> {
+                val player = exoPlayer ?: return
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+            }
         }
     }
 
     fun seekTo(positionMs: Long) {
-        exoPlayer?.seekTo(maxOf(0L, positionMs))
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.seekTo(maxOf(0L, positionMs))
+            DecoderMode.VLC -> vlcPlayerEngine.seekTo(maxOf(0L, positionMs))
+            else -> exoPlayer?.seekTo(maxOf(0L, positionMs))
+        }
     }
 
     fun skipForward(seconds: Int = 10) {
-        val player = exoPlayer ?: return
-        val target = player.currentPosition + (seconds * 1000L)
-        player.seekTo(minOf(player.duration, target))
+        val current = _playerState.value.currentPositionMs
+        val duration = _playerState.value.durationMs
+        val target = current + (seconds * 1000L)
+        val finalPos = if (duration > 0) minOf(duration, target) else target
+        seekTo(finalPos)
     }
 
     fun skipBackward(seconds: Int = 10) {
-        val player = exoPlayer ?: return
-        val target = player.currentPosition - (seconds * 1000L)
-        player.seekTo(maxOf(0L, target))
+        val current = _playerState.value.currentPositionMs
+        val target = current - (seconds * 1000L)
+        seekTo(maxOf(0L, target))
     }
 
     fun setPlaybackSpeed(speed: Float) {
-        val player = exoPlayer ?: return
-        player.playbackParameters = PlaybackParameters(speed)
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.setPlaybackSpeed(speed)
+            DecoderMode.VLC -> vlcPlayerEngine.setPlaybackSpeed(speed)
+            else -> exoPlayer?.playbackParameters = PlaybackParameters(speed)
+        }
         _playerState.value = _playerState.value.copy(playbackSpeed = speed)
     }
 
@@ -996,9 +1563,12 @@ class MediaPlayerManager(private val context: Context) {
     fun cycleDecoder() {
         val current = _playerState.value.decoderMode
         val next = when (current) {
-            DecoderMode.HW -> DecoderMode.SW
-            DecoderMode.SW -> DecoderMode.HW_PLUS
-            DecoderMode.HW_PLUS -> DecoderMode.HW
+            DecoderMode.HW -> DecoderMode.VLC
+            DecoderMode.VLC -> DecoderMode.SYSTEM
+            DecoderMode.SYSTEM -> DecoderMode.HW_PLUS
+            DecoderMode.HW_PLUS -> DecoderMode.SW
+            DecoderMode.SW -> DecoderMode.FFMPEG
+            DecoderMode.FFMPEG -> DecoderMode.HW
         }
         switchToDecoder(next, isUserAction = true)
     }
@@ -1090,15 +1660,21 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun updateProgress() {
-        val player = exoPlayer ?: return
-        val pos = player.currentPosition
-        val dur = if (player.duration > 0) player.duration else 0L
-        val buffered = player.bufferedPosition
-        _playerState.value = _playerState.value.copy(
-            currentPositionMs = pos,
-            durationMs = dur,
-            bufferedPositionMs = buffered
-        )
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.pollProgress()
+            DecoderMode.VLC -> vlcPlayerEngine.pollProgress()
+            else -> {
+                val player = exoPlayer ?: return
+                val pos = player.currentPosition
+                val dur = if (player.duration > 0) player.duration else 0L
+                val buffered = player.bufferedPosition
+                _playerState.value = _playerState.value.copy(
+                    currentPositionMs = pos,
+                    durationMs = dur,
+                    bufferedPositionMs = buffered
+                )
+            }
+        }
     }
 
     fun setDebugDialogVisible(visible: Boolean) {
@@ -1118,20 +1694,30 @@ class MediaPlayerManager(private val context: Context) {
 
     fun forcePlay() {
         addDebugLog("[CONTROL] Paksa pemutaran (Force Play) dipicu...")
-        exoPlayer?.let { p ->
-            p.playWhenReady = true
-            p.play()
-            val cur = p.currentPosition
-            p.seekTo(cur)
-            addDebugLog("[CONTROL] State: ${p.playbackState}, Pos: ${cur}ms, PlayWhenReady: ${p.playWhenReady}")
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.play()
+            DecoderMode.VLC -> vlcPlayerEngine.play()
+            else -> {
+                exoPlayer?.let { p ->
+                    p.playWhenReady = true
+                    p.play()
+                    val cur = p.currentPosition
+                    p.seekTo(cur)
+                    addDebugLog("[CONTROL] State: ${p.playbackState}, Pos: ${cur}ms, PlayWhenReady: ${p.playWhenReady}")
+                }
+            }
         }
     }
 
     fun reloadCurrentMedia() {
         val media = currentMediaItem ?: return
-        val pos = exoPlayer?.currentPosition ?: 0L
+        val pos = _playerState.value.currentPositionMs
         addDebugLog("[CONTROL] Memuat ulang media saat ini dari posisi: ${pos}ms...")
-        playMediaInternal(media, pos)
+        when (activeDecoderMode) {
+            DecoderMode.SYSTEM -> systemPlayerEngine.playMedia(media, pos)
+            DecoderMode.VLC -> vlcPlayerEngine.playMedia(media, pos)
+            else -> playMediaInternal(media, pos)
+        }
     }
 
     fun getFullDiagnosticReport(): String {
@@ -1139,13 +1725,17 @@ class MediaPlayerManager(private val context: Context) {
         val state = _playerState.value
         val media = currentMediaItem
 
-        val pStateName = when (player?.playbackState) {
-            Player.STATE_IDLE -> "IDLE (Menganggur)"
-            Player.STATE_BUFFERING -> "BUFFERING (Memuat penyangga)"
-            Player.STATE_READY -> "READY (Siap memutar)"
-            Player.STATE_ENDED -> "ENDED (Selesai)"
-            null -> "TIDAK ADA PLAYER"
-            else -> "UNKNOWN (${player.playbackState})"
+        val pStateName = when (state.decoderMode) {
+            DecoderMode.SYSTEM -> if (state.isPlaying) "PLAYING (Mesin Sistem Android)" else "PAUSED/READY (Mesin Sistem Android)"
+            DecoderMode.VLC -> if (state.isPlaying) "PLAYING (LibVLC C++ Native SW)" else "PAUSED/READY (LibVLC C++ Native SW)"
+            else -> when (player?.playbackState) {
+                Player.STATE_IDLE -> "IDLE (Menganggur)"
+                Player.STATE_BUFFERING -> "BUFFERING (Memuat penyangga)"
+                Player.STATE_READY -> "READY (Siap memutar)"
+                Player.STATE_ENDED -> "ENDED (Selesai)"
+                null -> "TIDAK ADA EXOPLAYER (Aktif di Engine Non-Exo)"
+                else -> "UNKNOWN (${player?.playbackState})"
+            }
         }
 
         return buildString {
@@ -1160,20 +1750,21 @@ class MediaPlayerManager(private val context: Context) {
             appendLine()
             appendLine("[2. STATUS DEKODER & FFMPEG]")
             appendLine("- Mode Dekoder Dipilih: ${state.decoderMode.label} (${state.decoderMode.name})")
+            appendLine("- LibVLC C++ Native Engine: Aktif (org.videolan.libvlc)")
             appendLine("- FFmpeg NextLib Aktif: ${isFfmpegAvailable()}")
             appendLine("- FFmpeg Load Error: ${ffmpegLoadError ?: "None"}")
             appendLine("- Dekoder Video Aktif: ${state.activeVideoDecoder}")
             appendLine("- Dekoder Audio Aktif: ${state.activeAudioDecoder}")
             appendLine()
-            appendLine("[3. STATUS EXOPLAYER]")
+            appendLine("[3. STATUS ENGINE PEMUTAR]")
             appendLine("- Playback State: $pStateName")
-            appendLine("- Is Playing: ${player?.isPlaying}")
+            appendLine("- Is Playing: ${state.isPlaying}")
             appendLine("- Is Loading / Buffering: ${state.isLoading}")
-            appendLine("- Play When Ready: ${player?.playWhenReady}")
+            appendLine("- Play When Ready: ${player?.playWhenReady ?: state.isPlaying}")
             appendLine("- First Frame Rendered: ${state.firstFrameRendered}")
-            appendLine("- Posisi Saat Ini: ${player?.currentPosition ?: 0}ms / ${player?.duration ?: 0}ms")
-            appendLine("- Penyangga (Buffer): ${player?.bufferedPosition ?: 0}ms")
-            appendLine("- Total Buffer Terisi: ${player?.totalBufferedDuration ?: 0}ms")
+            appendLine("- Posisi Saat Ini: ${state.currentPositionMs}ms / ${state.durationMs}ms")
+            appendLine("- Penyangga (Buffer): ${state.bufferedPositionMs}ms")
+            appendLine("- Total Buffer Terisi: ${player?.totalBufferedDuration ?: state.bufferedPositionMs}ms")
             appendLine("- Frame Terlewat (Dropped): ${state.droppedFramesCount}")
             appendLine("- Estimasi Bitrate: ${state.estimatedBitrateKbps} kbps")
             appendLine("- Pesan Error: ${state.errorMessage ?: "Tidak ada error"}")
@@ -1202,6 +1793,8 @@ class MediaPlayerManager(private val context: Context) {
     fun release() {
         _activePlayer.value = null
         try {
+            systemPlayerEngine.release()
+            vlcPlayerEngine.release()
             exoPlayer?.let { p ->
                 p.stop()
                 p.clearVideoSurface()

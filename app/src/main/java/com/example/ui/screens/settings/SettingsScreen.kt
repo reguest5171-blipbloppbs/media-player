@@ -136,9 +136,11 @@ fun SettingsScreen(
                             )
                             Text(
                                 text = when (defaultDecoder) {
-                                    "SW" -> "SW (Classic MX Software Decoder - Best for older/unsupported codecs)"
+                                    "SYSTEM" -> "Sistem (Native Android OS MediaPlayer - Ringan & Kompatibel)"
+                                    "SW" -> "SW (Google Android OS Software Decoder)"
                                     "HW_PLUS" -> "HW+ (Hardware Accelerated Extended)"
-                                    else -> "HW (Hardware Acceleration - Standard)"
+                                    "FFMPEG" -> "FFmpeg (FFmpeg NextLib Software Engine)"
+                                    else -> "HW (Chipset Hardware Acceleration - Standard)"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -328,9 +330,11 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     val options = listOf(
-                        "HW" to "HW (Hardware Acceleration - Faster, battery efficient)",
-                        "SW" to "SW (Classic MX Software Decoder - Maximum codec compatibility)",
-                        "HW_PLUS" to "HW+ (Hardware Accelerated Extended)"
+                        "HW" to "HW (Hardware MediaCodec Chipset - Cepat, Hemat Baterai)",
+                        "SYSTEM" to "Sistem (Native Android OS MediaPlayer - Solusi Anti-Macet HP Kentang)",
+                        "HW_PLUS" to "HW+ (Hardware Accelerated Extended)",
+                        "SW" to "SW (Google Android OS Software Decoder)",
+                        "FFMPEG" to "FFmpeg (FFmpeg NextLib Software Engine)"
                     )
 
                     options.forEach { (code, title) ->

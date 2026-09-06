@@ -45,6 +45,7 @@ media3 = "1.5.1"
 commonsNet = "3.10.0"
 jcifsNg = "2.1.10"
 nextlib = "0.7.0"
+libvlc = "3.3.4"
 
 
 [libraries]
@@ -113,6 +114,7 @@ media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls
 commons-net = { group = "commons-net", name = "commons-net", version.ref = "commonsNet" }
 jcifs = { group = "eu.agno3.jcifs", name = "jcifs-ng", version.ref = "jcifsNg" }
 nextlib-media3ext = { group = "io.github.anilbeesetti.nextlib", name = "nextlib-media3ext", version.ref = "nextlib" }
+libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 
 
 [plugins]

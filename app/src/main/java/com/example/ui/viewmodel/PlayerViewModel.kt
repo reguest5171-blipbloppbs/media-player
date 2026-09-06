@@ -102,20 +102,29 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         _playlist.value = playlistQueue.ifEmpty { listOf(media) }
 
         viewModelScope.launch {
-            val defaultDec = preferencesManager.defaultDecoderFlow.first()
-            val decoder = when (defaultDec) {
-                "SW" -> DecoderMode.SW
-                "HW_PLUS" -> DecoderMode.HW_PLUS
-                else -> DecoderMode.HW
+            try {
+                val defaultDec = try { preferencesManager.defaultDecoderFlow.first() } catch (_: Throwable) { "HW" }
+                val decoder = when (defaultDec) {
+                    "SW" -> DecoderMode.SW
+                    "HW_PLUS" -> DecoderMode.HW_PLUS
+                    "SYSTEM" -> DecoderMode.SYSTEM
+                    "FFMPEG" -> DecoderMode.FFMPEG
+                    "VLC" -> DecoderMode.VLC
+                    else -> DecoderMode.HW
+                }
+
+                val resume = try { preferencesManager.resumePlaybackFlow.first() } catch (_: Throwable) { true }
+                val history = if (resume) {
+                    try { repository.getPlayHistoryForUri(media.uri.toString()) } catch (_: Throwable) { null }
+                } else null
+                val startPos = history?.lastPositionMs ?: 0L
+
+                playerManager.initializePlayer(decoder)
+                playerManager.playMedia(media, startPos)
+                showControlsWithTimeout()
+            } catch (e: Throwable) {
+                android.util.Log.e("PlayerViewModel", "Error in playMediaItem: ${e.message}", e)
             }
-
-            val resume = preferencesManager.resumePlaybackFlow.first()
-            val history = if (resume) repository.getPlayHistoryForUri(media.uri.toString()) else null
-            val startPos = history?.lastPositionMs ?: 0L
-
-            playerManager.initializePlayer(decoder)
-            playerManager.playMedia(media, startPos)
-            showControlsWithTimeout()
         }
     }
 

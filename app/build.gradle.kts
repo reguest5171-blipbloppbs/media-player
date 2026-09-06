@@ -189,6 +189,7 @@ dependencies {
   implementation(libs.commons.net)
   implementation(libs.jcifs)
   implementation(libs.nextlib.media3ext)
+  implementation(libs.libvlc.all)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

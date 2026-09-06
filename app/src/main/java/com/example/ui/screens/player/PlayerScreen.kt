@@ -2,7 +2,10 @@ package com.example.ui.screens.player
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.graphics.SurfaceTexture
 import android.view.LayoutInflater
+import android.view.Surface
+import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -264,43 +267,162 @@ fun PlayerScreen(
                 }
             }
     ) {
-        // Player Surface (Using TextureView to avoid Android 8.1 SurfaceView BufferQueue deadlock)
-        AndroidView(
-            factory = { ctx ->
-                val view = LayoutInflater.from(ctx).inflate(R.layout.custom_player_view, null) as PlayerView
-                view.apply {
-                    player = activePlayer ?: viewModel.playerManager.getPlayer()
-                    useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    keepScreenOn = true
-                    layoutParams = FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                }
-            },
-            update = { playerView ->
-                try {
-                    val currentPlayer = activePlayer ?: viewModel.playerManager.getPlayer()
-                    if (playerView.player !== currentPlayer) {
-                        playerView.player = currentPlayer
+        // Player Surface
+        if (playerState.decoderMode == DecoderMode.VLC) {
+            // LibVLC Native C++ Engine via TextureView & IVLCVout
+            AndroidView(
+                factory = { ctx ->
+                    TextureView(ctx).apply {
+                        layoutParams = FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                viewModel.playerManager.vlcPlayerEngine.attachVout(this@apply)
+                            }
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                viewModel.playerManager.vlcPlayerEngine.detachVout()
+                                return true
+                            }
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        }
                     }
-                    when (playerState.aspectRatioMode) {
-                        AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        AspectRatioMode.CROP -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        AspectRatioMode.STRETCH -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
-                        AspectRatioMode.ORIGINAL -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                },
+                update = { textureView ->
+                    try {
+                        val videoWidth = playerState.videoWidth
+                        val videoHeight = playerState.videoHeight
+                        val viewWidth = textureView.width.toFloat()
+                        val viewHeight = textureView.height.toFloat()
+                        if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
+                            val matrix = android.graphics.Matrix()
+                            val sx = viewWidth / videoWidth
+                            val sy = viewHeight / videoHeight
+                            when (playerState.aspectRatioMode) {
+                                AspectRatioMode.FIT -> {
+                                    val scale = kotlin.math.min(sx, sy)
+                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                                AspectRatioMode.CROP -> {
+                                    val scale = kotlin.math.max(sx, sy)
+                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                                AspectRatioMode.STRETCH -> {
+                                    matrix.setScale(1f, 1f)
+                                }
+                                AspectRatioMode.ORIGINAL -> {
+                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                            }
+                            textureView.setTransform(matrix)
+                        }
+                    } catch (_: Throwable) {}
+                },
+                onRelease = {
+                    try {
+                        viewModel.playerManager.vlcPlayerEngine.detachVout()
+                    } catch (_: Throwable) {}
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (playerState.decoderMode == DecoderMode.SYSTEM) {
+            // Android Native MediaPlayer Surface via TextureView (NuPlayer / Stagefright)
+            AndroidView(
+                factory = { ctx ->
+                    TextureView(ctx).apply {
+                        layoutParams = FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                viewModel.playerManager.systemPlayerEngine.setSurface(Surface(st))
+                            }
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                viewModel.playerManager.systemPlayerEngine.setSurface(null)
+                                return true
+                            }
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        }
                     }
-                } catch (_: Throwable) {}
-            },
-            onRelease = { playerView ->
-                try {
-                    playerView.player = null
-                } catch (_: Throwable) {}
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+                },
+                update = { textureView ->
+                    try {
+                        val videoWidth = playerState.videoWidth
+                        val videoHeight = playerState.videoHeight
+                        val viewWidth = textureView.width.toFloat()
+                        val viewHeight = textureView.height.toFloat()
+                        if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
+                            val matrix = android.graphics.Matrix()
+                            val sx = viewWidth / videoWidth
+                            val sy = viewHeight / videoHeight
+                            when (playerState.aspectRatioMode) {
+                                AspectRatioMode.FIT -> {
+                                    val scale = kotlin.math.min(sx, sy)
+                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                                AspectRatioMode.CROP -> {
+                                    val scale = kotlin.math.max(sx, sy)
+                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                                AspectRatioMode.STRETCH -> {
+                                    matrix.setScale(1f, 1f)
+                                }
+                                AspectRatioMode.ORIGINAL -> {
+                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                }
+                            }
+                            textureView.setTransform(matrix)
+                        }
+                    } catch (_: Throwable) {}
+                },
+                onRelease = {
+                    try {
+                        viewModel.playerManager.systemPlayerEngine.setSurface(null)
+                    } catch (_: Throwable) {}
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // ExoPlayer Surface (HW, HW+, SW, FFMPEG)
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        player = activePlayer
+                        useController = false
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        keepScreenOn = true
+                        layoutParams = FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                    }
+                },
+                update = { playerView ->
+                    try {
+                        if (playerView.player !== activePlayer) {
+                            playerView.player = activePlayer
+                        }
+                        when (playerState.aspectRatioMode) {
+                            AspectRatioMode.FIT -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            AspectRatioMode.CROP -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            AspectRatioMode.STRETCH -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                            AspectRatioMode.ORIGINAL -> playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+                        }
+                    } catch (_: Throwable) {}
+                },
+                onRelease = { playerView ->
+                    try {
+                        playerView.player = null
+                    } catch (_: Throwable) {}
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // Loading & Diagnostic HUD Overlay
         if (playerState.isLoading && playerState.errorMessage == null) {
@@ -313,18 +435,18 @@ fun PlayerScreen(
                 Card(
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xDD12121A)),
-                    modifier = Modifier.widthIn(max = 420.dp)
+                    modifier = Modifier.widthIn(max = 480.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         CircularProgressIndicator(
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(46.dp),
+                            modifier = Modifier.size(44.dp),
                             strokeWidth = 3.5.dp
                         )
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "Memuat Video...",
                             style = MaterialTheme.typography.titleMedium,
@@ -348,40 +470,45 @@ fun PlayerScreen(
                                 textAlign = TextAlign.Center
                             )
                         }
-                        if (playerState.activeAudioDecoder.isNotEmpty() && playerState.activeAudioDecoder != "Belum terdeteksi") {
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = playerState.activeAudioDecoder,
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = Color(0xFF81C784),
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                        // Quick Actions while loading
+                        // Quick Mode Switcher Chips
+                        Text(
+                            text = "Beralih Mode Dekoder Cepat:",
+                            fontSize = 11.sp,
+                            color = Color.LightGray
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf(
+                                DecoderMode.HW to "HW ⚡",
+                                DecoderMode.SYSTEM to "Sistem 🏛️",
+                                DecoderMode.HW_PLUS to "HW+ ⚡+",
+                                DecoderMode.SW to "SW ⚙️"
+                            ).forEach { (mode, label) ->
+                                val isCur = playerState.decoderMode == mode
+                                androidx.compose.material3.FilledTonalButton(
+                                    onClick = { viewModel.setDecoderMode(mode) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 4.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = if (isCur) MaterialTheme.colorScheme.primary else Color(0xFF232332),
+                                        contentColor = if (isCur) Color.White else Color.LightGray
+                                    )
+                                ) {
+                                    Text(label, fontSize = 10.sp, fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            if (playerState.decoderMode != DecoderMode.SW) {
-                                androidx.compose.material3.OutlinedButton(
-                                    onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                                ) {
-                                    Text("Mode SW ⚙️", fontSize = 11.sp, color = Color(0xFFFF8A80))
-                                }
-                            } else {
-                                androidx.compose.material3.OutlinedButton(
-                                    onClick = { viewModel.setDecoderMode(DecoderMode.HW) },
-                                    modifier = Modifier.weight(1f),
-                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                                ) {
-                                    Text("Mode HW ⚡", fontSize = 11.sp, color = Color(0xFF81D4FA))
-                                }
-                            }
                             androidx.compose.material3.OutlinedButton(
                                 onClick = { viewModel.forcePlay() },
                                 modifier = Modifier.weight(1f),
@@ -394,7 +521,7 @@ fun PlayerScreen(
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                             ) {
-                                Text("Log 🐞", fontSize = 11.sp)
+                                Text("Terminal Debug 🐞", fontSize = 11.sp)
                             }
                         }
                     }
@@ -440,7 +567,39 @@ fun PlayerScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Fast switch buttons on error
+                        Text(
+                            text = "Coba Mode Pemutar Lain:",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf(
+                                DecoderMode.HW to "Mode HW ⚡",
+                                DecoderMode.SYSTEM to "Mode Sistem 🏛️",
+                                DecoderMode.SW to "Mode SW ⚙️"
+                            ).forEach { (mode, label) ->
+                                androidx.compose.material3.Button(
+                                    onClick = { viewModel.setDecoderMode(mode) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 6.dp),
+                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                        containerColor = if (playerState.decoderMode == mode) MaterialTheme.colorScheme.primary else Color(0xFF37474F)
+                                    )
+                                ) {
+                                    Text(label, fontSize = 10.sp, color = Color.White)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
@@ -457,29 +616,8 @@ fun PlayerScreen(
                             ) {
                                 Text("Coba Lagi", fontSize = 12.sp)
                             }
-                            if (playerState.decoderMode != DecoderMode.SW) {
-                                androidx.compose.material3.Button(
-                                    onClick = { viewModel.setDecoderMode(DecoderMode.SW) },
-                                    modifier = Modifier.weight(1f),
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFD32F2F)
-                                    )
-                                ) {
-                                    Text("Mode SW", fontSize = 12.sp, color = Color.White)
-                                }
-                            } else {
-                                androidx.compose.material3.Button(
-                                    onClick = { viewModel.setDecoderMode(DecoderMode.HW) },
-                                    modifier = Modifier.weight(1f),
-                                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF1976D2)
-                                    )
-                                ) {
-                                    Text("Mode HW", fontSize = 12.sp, color = Color.White)
-                                }
-                            }
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
@@ -710,15 +848,18 @@ fun PlayerScreen(
                             }
                         }
 
-                        // Decoder Mode Badge / Switcher (HW / SW / HW+)
+                        // Decoder Mode Badge / Switcher (HW / VLC / Sistem / HW+ / SW / FFmpeg)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(
                                     when (playerState.decoderMode) {
                                         DecoderMode.HW -> Color(0xFF1976D2)
-                                        DecoderMode.SW -> Color(0xFFD32F2F)
+                                        DecoderMode.VLC -> Color(0xFFFF6D00)
+                                        DecoderMode.SYSTEM -> Color(0xFF00796B)
                                         DecoderMode.HW_PLUS -> Color(0xFF7B1FA2)
+                                        DecoderMode.SW -> Color(0xFFE65100)
+                                        DecoderMode.FFMPEG -> Color(0xFFD32F2F)
                                     }
                                 )
                                 .clickable { viewModel.cycleDecoder() }
@@ -1270,7 +1411,7 @@ private fun DecoderDebugDialog(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     DecoderMode.values().forEach { mode ->
@@ -1283,20 +1424,23 @@ private fun DecoderDebugDialog(
                                     if (isSelected) {
                                         when (mode) {
                                             DecoderMode.HW -> Color(0xFF1976D2)
-                                            DecoderMode.SW -> Color(0xFFD32F2F)
+                                            DecoderMode.VLC -> Color(0xFFFF6D00)
+                                            DecoderMode.SYSTEM -> Color(0xFF00796B)
                                             DecoderMode.HW_PLUS -> Color(0xFF7B1FA2)
+                                            DecoderMode.SW -> Color(0xFFE65100)
+                                            DecoderMode.FFMPEG -> Color(0xFFD32F2F)
                                         }
                                     } else Color(0xFF242436)
                                 )
                                 .clickable { onSelectDecoderMode(mode) }
-                                .padding(vertical = 10.dp),
+                                .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = mode.label,
                                 color = if (isSelected) Color.White else Color.LightGray,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 13.sp
+                                fontSize = 11.sp
                             )
                         }
                     }

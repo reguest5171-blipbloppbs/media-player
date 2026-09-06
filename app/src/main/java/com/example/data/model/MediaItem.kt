@@ -3,9 +3,12 @@ package com.example.data.model
 import android.net.Uri
 
 enum class DecoderMode(val label: String, val description: String) {
-    HW("HW", "Hardware acceleration (Low battery, fast)"),
-    SW("SW", "Classic MX Software Decoder (Maximum compatibility, x265/legacy chips)"),
-    HW_PLUS("HW+", "Hardware+ Enhanced Renderer")
+    HW("HW", "Hardware MediaCodec (Akselerasi Chipset Asli - Cepat & Hemat Baterai)"),
+    VLC("VLC / SW", "LibVLC Native Engine (Mesin C++ VLC - Pemutar HEVC 10-Bit & Audio 6-Channel)"),
+    SYSTEM("Sistem", "Android Native MediaPlayer (Mesin Bawaan OS - Paling Stabil untuk HP Oppo/Lama)"),
+    HW_PLUS("HW+", "Hardware+ Enhanced (Akselerasi Perangkat Keras Diperluas)"),
+    SW("SW (Google)", "Google Software Decoder (Decoder Bawaan Android)"),
+    FFMPEG("FFmpeg", "FFmpeg Software Engine (Multi-Format)")
 }
 
 enum class AspectRatioMode(val label: String) {
