@@ -269,7 +269,7 @@ class MediaPlayerManager(private val context: Context) {
 
     private fun createExtractorsFactory(): DefaultExtractorsFactory {
         return DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
+            .setConstantBitrateSeekingEnabled(false)
     }
 
     @Synchronized
@@ -291,11 +291,12 @@ class MediaPlayerManager(private val context: Context) {
         // Load control tuned for ultra-fast, responsive start without buffer starvation
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2000,  // min buffer 2s
-                20000, // max buffer 20s
-                300,   // buffer for playback 300ms (instant start!)
+                1500,  // min buffer 1.5s
+                30000, // max buffer 30s
+                250,   // buffer for playback 250ms (instant start!)
                 500    // buffer for rebuffering 500ms
             )
+            .setBackBuffer(10000, false)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -476,12 +477,22 @@ class MediaPlayerManager(private val context: Context) {
                 if (playbackState == Player.STATE_BUFFERING) {
                     bufferingWatchdogJob?.cancel()
                     bufferingWatchdogJob = coroutineScope.launch {
-                        kotlinx.coroutines.delay(4000)
+                        kotlinx.coroutines.delay(2500)
                         if (_playerState.value.isLoading && exoPlayer?.playbackState == Player.STATE_BUFFERING) {
                             val buf = exoPlayer?.bufferedPosition ?: 0L
+                            val pos = exoPlayer?.currentPosition ?: 0L
                             val dur = exoPlayer?.duration ?: 0L
-                            addDebugLog("[WATCHDOG] Masih buffering (Buffer: ${buf}ms / ${dur}ms). Mempertahankan pemutaran...")
+                            addDebugLog("[WATCHDOG] Buffering aktif (Pos: ${pos}ms, Buffer: ${buf}ms / ${dur}ms). Memicu pemutaran...")
                             exoPlayer?.play()
+                            
+                            // If still buffering after another 2 seconds, trigger a frame refresh
+                            kotlinx.coroutines.delay(2000)
+                            if (_playerState.value.isLoading && exoPlayer?.playbackState == Player.STATE_BUFFERING) {
+                                val currentP = exoPlayer?.currentPosition ?: 0L
+                                addDebugLog("[WATCHDOG] Mendorong sinkronisasi frame pada ${currentP}ms...")
+                                exoPlayer?.seekTo(currentP)
+                                exoPlayer?.play()
+                            }
                         }
                     }
                 } else {
@@ -604,7 +615,7 @@ class MediaPlayerManager(private val context: Context) {
 
         val factory = NextRenderersFactory(context)
         factory.setEnableDecoderFallback(true)
-        factory.setAllowedVideoJoiningTimeMs(5000)
+        factory.setAllowedVideoJoiningTimeMs(0) // Zero joining deadline allows immediate playback
         factory.setMediaCodecSelector(customMediaCodecSelector)
 
         val ffmpegReady = isFfmpegAvailable()
@@ -652,11 +663,12 @@ class MediaPlayerManager(private val context: Context) {
 
         try {
             val mediaSource = createMediaSourceFor(media)
-            player.setMediaSource(mediaSource)
-            player.prepare()
             if (startPositionMs > 0) {
-                player.seekTo(startPositionMs)
+                player.setMediaSource(mediaSource, startPositionMs)
+            } else {
+                player.setMediaSource(mediaSource)
             }
+            player.prepare()
             player.playWhenReady = true
             player.play()
 

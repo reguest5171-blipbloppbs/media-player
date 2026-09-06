@@ -2,9 +2,11 @@ package com.example.ui.screens.player
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
+import com.example.R
 import androidx.annotation.OptIn
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -262,13 +264,15 @@ fun PlayerScreen(
                 }
             }
     ) {
-        // Player Surface
+        // Player Surface (Using TextureView to avoid Android 8.1 SurfaceView BufferQueue deadlock)
         AndroidView(
             factory = { ctx ->
-                PlayerView(ctx).apply {
+                val view = LayoutInflater.from(ctx).inflate(R.layout.custom_player_view, null) as PlayerView
+                view.apply {
                     player = activePlayer ?: viewModel.playerManager.getPlayer()
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
                     keepScreenOn = true
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
