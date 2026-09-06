@@ -135,10 +135,7 @@ class OptimizedRenderersFactory(
                     allowedVideoJoiningTimeMs,
                     eventHandler,
                     eventListener,
-                    50,
-                    threads,
-                    numInputBuffers,
-                    numOutputBuffers
+                    50
                 )
                 out.add(ffmpegVideoRenderer)
             } catch (e: Exception) {
@@ -454,7 +451,7 @@ class VlcPlayerEngine(
                 "--no-skip-frames",
                 "--network-caching=3000",
                 "--file-caching=3000",
-                "--avcodec-hw=any",
+                "--avcodec-hw=none",
                 "--avcodec-threads=0",
                 "-vv"
             )
@@ -514,7 +511,7 @@ class VlcPlayerEngine(
                     "--no-drop-late-frames",
                     "--network-caching=3000",
                     "--file-caching=3000",
-                    "--avcodec-hw=any",
+                    "--avcodec-hw=none",
                     "--avcodec-threads=0"
                 )
                 LibVLC(context, opts).also { libVLC = it }
@@ -571,8 +568,8 @@ class VlcPlayerEngine(
                 Media(vlc, mediaItem.uri)
             }
 
-            // HW acceleration automatic fallback to SW in VLC C++
-            media.setHWDecoderEnabled(true, false)
+            // Force SW Decoding in VLC C++
+            media.setHWDecoderEnabled(false, false)
             media.addOption(":file-caching=3000")
             media.addOption(":network-caching=3000")
             media.addOption(":clock-jitter=0")
