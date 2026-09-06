@@ -94,6 +94,159 @@ data class PlayerState(
 )
 
 @OptIn(UnstableApi::class)
+class OptimizedRenderersFactory(
+    private val context: Context,
+    private val decoderMode: DecoderMode,
+    private val customMediaCodecSelector: MediaCodecSelector
+) : DefaultRenderersFactory(context) {
+
+    init {
+        setEnableDecoderFallback(true)
+        setAllowedVideoJoiningTimeMs(5000L)
+        setMediaCodecSelector(customMediaCodecSelector)
+    }
+
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: android.os.Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: java.util.ArrayList<Renderer>
+    ) {
+        val ffmpegAvailable = FfmpegLibrary.isAvailable()
+        val availableCores = Runtime.getRuntime().availableProcessors()
+        // Use 4 threads max for stability and memory conservation on mobile devices
+        val threads = kotlin.math.min(availableCores, 4).coerceAtLeast(2)
+        // 16 input buffers and 16 output buffers ensure frame-threading never starves or deadlocks
+        val numInputBuffers = 16
+        val numOutputBuffers = 16
+
+        if (decoderMode == DecoderMode.SW && ffmpegAvailable) {
+            // Software mode: FFmpeg video renderer FIRST
+            try {
+                val ffmpegVideoRenderer = FfmpegVideoRenderer(
+                    allowedVideoJoiningTimeMs,
+                    eventHandler,
+                    eventListener,
+                    50,
+                    threads,
+                    numInputBuffers,
+                    numOutputBuffers
+                )
+                out.add(ffmpegVideoRenderer)
+            } catch (e: Exception) {
+                android.util.Log.e("OptimizedRenderers", "Error creating FfmpegVideoRenderer", e)
+            }
+            // Add hardware decoder as fallback
+            super.buildVideoRenderers(
+                context,
+                EXTENSION_RENDERER_MODE_OFF,
+                mediaCodecSelector,
+                enableDecoderFallback,
+                eventHandler,
+                eventListener,
+                allowedVideoJoiningTimeMs,
+                out
+            )
+        } else {
+            // HW or HW+: Hardware decoder first
+            super.buildVideoRenderers(
+                context,
+                EXTENSION_RENDERER_MODE_OFF,
+                mediaCodecSelector,
+                enableDecoderFallback,
+                eventHandler,
+                eventListener,
+                allowedVideoJoiningTimeMs,
+                out
+            )
+            // If FFmpeg is available, add FfmpegVideoRenderer as fallback
+            if (ffmpegAvailable) {
+                try {
+                    val ffmpegVideoRenderer = FfmpegVideoRenderer(
+                        allowedVideoJoiningTimeMs,
+                        eventHandler,
+                        eventListener,
+                        50,
+                        threads,
+                        numInputBuffers,
+                        numOutputBuffers
+                    )
+                    out.add(ffmpegVideoRenderer)
+                } catch (e: Exception) {
+                    android.util.Log.e("OptimizedRenderers", "Error creating FfmpegVideoRenderer fallback", e)
+                }
+            }
+        }
+    }
+
+    override fun buildAudioRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        audioSink: AudioSink,
+        eventHandler: android.os.Handler,
+        eventListener: AudioRendererEventListener,
+        out: java.util.ArrayList<Renderer>
+    ) {
+        val ffmpegAvailable = FfmpegLibrary.isAvailable()
+
+        if (decoderMode == DecoderMode.SW && ffmpegAvailable) {
+            // Software mode: FFmpeg audio renderer FIRST
+            try {
+                val ffmpegAudioRenderer = FfmpegAudioRenderer(
+                    eventHandler,
+                    eventListener,
+                    audioSink
+                )
+                out.add(ffmpegAudioRenderer)
+            } catch (e: Exception) {
+                android.util.Log.e("OptimizedRenderers", "Error creating FfmpegAudioRenderer", e)
+            }
+            // Add system audio decoder as fallback
+            super.buildAudioRenderers(
+                context,
+                EXTENSION_RENDERER_MODE_OFF,
+                mediaCodecSelector,
+                enableDecoderFallback,
+                audioSink,
+                eventHandler,
+                eventListener,
+                out
+            )
+        } else {
+            // HW: System Audio first
+            super.buildAudioRenderers(
+                context,
+                EXTENSION_RENDERER_MODE_OFF,
+                mediaCodecSelector,
+                enableDecoderFallback,
+                audioSink,
+                eventHandler,
+                eventListener,
+                out
+            )
+            // Add FFmpeg audio as fallback
+            if (ffmpegAvailable) {
+                try {
+                    val ffmpegAudioRenderer = FfmpegAudioRenderer(
+                        eventHandler,
+                        eventListener,
+                        audioSink
+                    )
+                    out.add(ffmpegAudioRenderer)
+                } catch (e: Exception) {
+                    android.util.Log.e("OptimizedRenderers", "Error creating FfmpegAudioRenderer fallback", e)
+                }
+            }
+        }
+    }
+}
+
 class MediaPlayerManager(private val context: Context) {
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -613,33 +766,22 @@ class MediaPlayerManager(private val context: Context) {
             }
         }
 
-        val factory = NextRenderersFactory(context)
-        factory.setEnableDecoderFallback(true)
-        factory.setAllowedVideoJoiningTimeMs(0) // Zero joining deadline allows immediate playback
-        factory.setMediaCodecSelector(customMediaCodecSelector)
+        val factory = OptimizedRenderersFactory(context, decoderMode, customMediaCodecSelector)
 
         val ffmpegReady = isFfmpegAvailable()
         if (ffmpegReady) {
             when (decoderMode) {
                 DecoderMode.SW -> {
-                    // NextRenderersFactory with PREFER places FfmpegVideoRenderer & FfmpegAudioRenderer FIRST
-                    // with proper audioSink connected to ExoPlayer master clock
-                    factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-                    addDebugLog("[RENDERER] Mode SW: NextRenderersFactory (FFmpeg Video + Audio Prioritas) 🚀")
+                    addDebugLog("[RENDERER] Mode SW: Optimized SW Renderers (FFmpeg Video + Audio 16-Buffer Queue) 🚀")
                 }
                 DecoderMode.HW -> {
-                    // Hardware MediaCodec first, with FFmpeg fallback
-                    factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                    addDebugLog("[RENDERER] Mode HW: NextRenderersFactory (Hardware Akselerasi + FFmpeg Fallback) ⚡")
+                    addDebugLog("[RENDERER] Mode HW: Optimized HW Renderers (Hardware Akselerasi + FFmpeg Fallback 16-Buffer Queue) ⚡")
                 }
                 DecoderMode.HW_PLUS -> {
-                    // Hardware plus FFmpeg fallback
-                    factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                    addDebugLog("[RENDERER] Mode HW+: NextRenderersFactory (Hardware Plus + FFmpeg Fallback) ⚡+")
+                    addDebugLog("[RENDERER] Mode HW+: Optimized HW+ Renderers (Hardware Plus + FFmpeg Fallback) ⚡+")
                 }
             }
         } else {
-            factory.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
             addDebugLog("[RENDERER] FFmpeg library tidak aktif, menggunakan decoder internal Android")
         }
 
