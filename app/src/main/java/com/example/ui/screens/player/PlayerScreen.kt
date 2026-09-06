@@ -279,9 +279,11 @@ fun PlayerScreen(
                         )
                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                                viewModel.playerManager.vlcPlayerEngine.attachVout(this@apply)
+                                viewModel.playerManager.vlcPlayerEngine.attachVout(this@apply, w, h)
                             }
-                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                                viewModel.playerManager.vlcPlayerEngine.updateWindowSize(w, h)
+                            }
                             override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
                                 viewModel.playerManager.vlcPlayerEngine.detachVout()
                                 return true
@@ -297,26 +299,30 @@ fun PlayerScreen(
                         val viewWidth = textureView.width.toFloat()
                         val viewHeight = textureView.height.toFloat()
                         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-                            val matrix = android.graphics.Matrix()
-                            val sx = viewWidth / videoWidth
-                            val sy = viewHeight / videoHeight
-                            when (playerState.aspectRatioMode) {
-                                AspectRatioMode.FIT -> {
-                                    val scale = kotlin.math.min(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                            val matrixTag = "$videoWidth,$videoHeight,$viewWidth,$viewHeight,${playerState.aspectRatioMode}"
+                            if (textureView.tag != matrixTag) {
+                                textureView.tag = matrixTag
+                                val matrix = android.graphics.Matrix()
+                                val sx = viewWidth / videoWidth
+                                val sy = viewHeight / videoHeight
+                                when (playerState.aspectRatioMode) {
+                                    AspectRatioMode.FIT -> {
+                                        val scale = kotlin.math.min(sx, sy)
+                                        matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
+                                    AspectRatioMode.CROP -> {
+                                        val scale = kotlin.math.max(sx, sy)
+                                        matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
+                                    AspectRatioMode.STRETCH -> {
+                                        matrix.setScale(1f, 1f)
+                                    }
+                                    AspectRatioMode.ORIGINAL -> {
+                                        matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
                                 }
-                                AspectRatioMode.CROP -> {
-                                    val scale = kotlin.math.max(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.STRETCH -> {
-                                    matrix.setScale(1f, 1f)
-                                }
-                                AspectRatioMode.ORIGINAL -> {
-                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
+                                textureView.setTransform(matrix)
                             }
-                            textureView.setTransform(matrix)
                         }
                     } catch (_: Throwable) {}
                 },
@@ -356,26 +362,30 @@ fun PlayerScreen(
                         val viewWidth = textureView.width.toFloat()
                         val viewHeight = textureView.height.toFloat()
                         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-                            val matrix = android.graphics.Matrix()
-                            val sx = viewWidth / videoWidth
-                            val sy = viewHeight / videoHeight
-                            when (playerState.aspectRatioMode) {
-                                AspectRatioMode.FIT -> {
-                                    val scale = kotlin.math.min(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                            val matrixTag = "$videoWidth,$videoHeight,$viewWidth,$viewHeight,${playerState.aspectRatioMode}"
+                            if (textureView.tag != matrixTag) {
+                                textureView.tag = matrixTag
+                                val matrix = android.graphics.Matrix()
+                                val sx = viewWidth / videoWidth
+                                val sy = viewHeight / videoHeight
+                                when (playerState.aspectRatioMode) {
+                                    AspectRatioMode.FIT -> {
+                                        val scale = kotlin.math.min(sx, sy)
+                                        matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
+                                    AspectRatioMode.CROP -> {
+                                        val scale = kotlin.math.max(sx, sy)
+                                        matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
+                                    AspectRatioMode.STRETCH -> {
+                                        matrix.setScale(1f, 1f)
+                                    }
+                                    AspectRatioMode.ORIGINAL -> {
+                                        matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
+                                    }
                                 }
-                                AspectRatioMode.CROP -> {
-                                    val scale = kotlin.math.max(sx, sy)
-                                    matrix.setScale(scale * videoWidth / viewWidth, scale * videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
-                                AspectRatioMode.STRETCH -> {
-                                    matrix.setScale(1f, 1f)
-                                }
-                                AspectRatioMode.ORIGINAL -> {
-                                    matrix.setScale(videoWidth / viewWidth, videoHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-                                }
+                                textureView.setTransform(matrix)
                             }
-                            textureView.setTransform(matrix)
                         }
                     } catch (_: Throwable) {}
                 },

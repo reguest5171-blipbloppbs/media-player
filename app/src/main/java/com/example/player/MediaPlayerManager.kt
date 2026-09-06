@@ -124,11 +124,11 @@ class OptimizedRenderersFactory(
         out: java.util.ArrayList<Renderer>
     ) {
         val ffmpegAvailable = FfmpegLibrary.isAvailable()
-        val threads = 2
-        val numInputBuffers = 32
-        val numOutputBuffers = 32
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(4, 8)
+        val numInputBuffers = 64
+        val numOutputBuffers = 64
 
-        if (decoderMode == DecoderMode.FFMPEG && ffmpegAvailable) {
+        if ((decoderMode == DecoderMode.FFMPEG || decoderMode == DecoderMode.SW) && ffmpegAvailable) {
             // Software mode (FFmpeg Engine): FFmpeg video renderer FIRST
             try {
                 val ffmpegVideoRenderer = FfmpegVideoRenderer(
@@ -156,7 +156,7 @@ class OptimizedRenderersFactory(
                 out
             )
         } else {
-            // Mode HW, HW+, SW (Google Android): 100% Menggunakan MediaCodec Android Asli (Tanpa FFmpeg)
+            // Mode HW, HW+ (Google Android): 100% Menggunakan MediaCodec Android Asli (Tanpa FFmpeg)
             super.buildVideoRenderers(
                 context,
                 EXTENSION_RENDERER_MODE_OFF,
@@ -182,7 +182,7 @@ class OptimizedRenderersFactory(
     ) {
         val ffmpegAvailable = FfmpegLibrary.isAvailable()
 
-        if (decoderMode == DecoderMode.FFMPEG && ffmpegAvailable) {
+        if ((decoderMode == DecoderMode.FFMPEG || decoderMode == DecoderMode.SW) && ffmpegAvailable) {
             // FFmpeg audio renderer FIRST
             try {
                 val ffmpegAudioRenderer = FfmpegAudioRenderer(
@@ -453,6 +453,9 @@ class VlcPlayerEngine(
                 "--no-drop-late-frames",
                 "--no-skip-frames",
                 "--network-caching=3000",
+                "--file-caching=3000",
+                "--avcodec-hw=any",
+                "--avcodec-threads=0",
                 "-vv"
             )
             libVLC = LibVLC(context, options)
@@ -462,19 +465,34 @@ class VlcPlayerEngine(
         }
     }
 
-    fun attachVout(textureView: android.view.TextureView) {
+    fun attachVout(textureView: android.view.TextureView, width: Int = 0, height: Int = 0) {
         try {
             attachedTextureView = textureView
             val mp = mediaPlayer ?: return
             val vout = mp.vlcVout
+            val w = if (width > 0) width else textureView.width
+            val h = if (height > 0) height else textureView.height
+            if (w > 0 && h > 0) {
+                vout.setWindowSize(w, h)
+            }
             if (!vout.areViewsAttached()) {
                 vout.setVideoView(textureView)
                 vout.attachViews()
-                onDebugLog("[VLC_ENGINE] Video view berhasil di-attach ke LibVLC Native Vout 📺")
+                onDebugLog("[VLC_ENGINE] Video view berhasil di-attach ke LibVLC Native Vout (${w}x${h}px) 📺")
+            } else if (w > 0 && h > 0) {
+                vout.setWindowSize(w, h)
             }
         } catch (e: Exception) {
             onDebugLog("[VLC_ENGINE_ERROR] attachVout gagal: ${e.message}")
         }
+    }
+
+    fun updateWindowSize(width: Int, height: Int) {
+        try {
+            if (width > 0 && height > 0) {
+                mediaPlayer?.vlcVout?.setWindowSize(width, height)
+            }
+        } catch (_: Throwable) {}
     }
 
     fun detachVout() {
@@ -492,7 +510,13 @@ class VlcPlayerEngine(
 
         try {
             val vlc = libVLC ?: run {
-                val opts = arrayListOf("--no-drop-late-frames", "--network-caching=3000")
+                val opts = arrayListOf(
+                    "--no-drop-late-frames",
+                    "--network-caching=3000",
+                    "--file-caching=3000",
+                    "--avcodec-hw=any",
+                    "--avcodec-threads=0"
+                )
                 LibVLC(context, opts).also { libVLC = it }
             }
 
@@ -514,10 +538,17 @@ class VlcPlayerEngine(
             attachedTextureView?.let { tv ->
                 try {
                     val vout = mp.vlcVout
+                    val w = tv.width
+                    val h = tv.height
+                    if (w > 0 && h > 0) {
+                        vout.setWindowSize(w, h)
+                    }
                     if (!vout.areViewsAttached()) {
                         vout.setVideoView(tv)
                         vout.attachViews()
-                        onDebugLog("[VLC_ENGINE] Surface re-attached ke mediaPlayer baru 📺")
+                        onDebugLog("[VLC_ENGINE] Surface re-attached ke mediaPlayer baru (${w}x${h}px) 📺")
+                    } else if (w > 0 && h > 0) {
+                        vout.setWindowSize(w, h)
                     }
                 } catch (e: Throwable) {
                     onDebugLog("[VLC_ENGINE_ERROR] Re-attach surface gagal: ${e.message}")
@@ -541,11 +572,12 @@ class VlcPlayerEngine(
             }
 
             // HW acceleration automatic fallback to SW in VLC C++
-            media.setHWDecoderEnabled(false, false)
+            media.setHWDecoderEnabled(true, false)
             media.addOption(":file-caching=3000")
             media.addOption(":network-caching=3000")
             media.addOption(":clock-jitter=0")
             media.addOption(":clock-synchro=0")
+            media.addOption(":avcodec-threads=0")
             
             mp.media = media
             media.release()

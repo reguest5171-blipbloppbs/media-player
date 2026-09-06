@@ -44,6 +44,11 @@
 -keepclassmembers class io.github.anilbeesetti.nextlib.** { *; }
 -dontwarn io.github.anilbeesetti.nextlib.**
 
+# LibVLC Native C++ Engine Rules
+-keep class org.videolan.libvlc.** { *; }
+-keepclassmembers class org.videolan.libvlc.** { *; }
+-dontwarn org.videolan.libvlc.**
+
 # Coil & Coil Video
 -keep class coil.** { *; }
 -keepclassmembers class coil.** { *; }
