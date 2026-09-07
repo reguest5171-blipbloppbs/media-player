@@ -144,6 +144,8 @@ fun PlayerScreen(
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showAudioDialog by remember { mutableStateOf(false) }
     var showSubtitleDialog by remember { mutableStateOf(false) }
+    var showExtSubPicker by remember { mutableStateOf(false) }
+    var showExtAudioPicker by remember { mutableStateOf(false) }
 
     val configuration = LocalConfiguration.current
 
@@ -1017,15 +1019,30 @@ fun PlayerScreen(
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text(
-                        text = "Audio Tracks",
+                        text = "Pengaturan Trek Audio",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            showAudioDialog = false
+                            showExtAudioPicker = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Audiotrack, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("📂 Buka Audio Eksternal (File HP / URL)")
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
                     if (playerState.audioTracks.isEmpty()) {
                         Text(
-                            text = "No selectable audio tracks available.",
+                            text = "Tidak ada trek audio internal bawaan video.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1073,10 +1090,48 @@ fun PlayerScreen(
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text(
-                        text = "Subtitle Tracks",
+                        text = "Pengaturan Subtitle",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            showSubtitleDialog = false
+                            showExtSubPicker = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("📂 Buka Subtitle Eksternal (SRT/VTT/URL)")
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Posisi Vertikal Subtitle (Geser Atas / Bawah):",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Bawah", fontSize = 11.sp)
+                        Slider(
+                            value = playerState.subtitleOffsetDp.toFloat(),
+                            onValueChange = { viewModel.setSubtitleOffset(it.toInt()) },
+                            valueRange = 0f..150f,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("Atas", fontSize = 11.sp)
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Disable subtitles option
@@ -1094,7 +1149,7 @@ fun PlayerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Disable Subtitles (Off)",
+                            text = "Matikan Subtitle (Off)",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
                             color = if (noneSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
@@ -1139,6 +1194,42 @@ fun PlayerScreen(
                 }
             }
         }
+    }
+
+    if (showExtSubPicker) {
+        com.example.ui.components.InAppFilePickerDialog(
+            title = "Pilih Subtitle Eksternal (SRT / VTT / ASS / URL)",
+            allowedExtensions = listOf("srt", "vtt", "ass", "ssa", "sub"),
+            onFileSelected = { file ->
+                showExtSubPicker = false
+                viewModel.loadExternalSubtitle(file.absolutePath)
+                Toast.makeText(context, "Subtitle eksternal berhasil dimuat!", Toast.LENGTH_SHORT).show()
+            },
+            onUrlSelected = { url ->
+                showExtSubPicker = false
+                viewModel.loadExternalSubtitle(url)
+                Toast.makeText(context, "Subtitle eksternal URL dimuat!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showExtSubPicker = false }
+        )
+    }
+
+    if (showExtAudioPicker) {
+        com.example.ui.components.InAppFilePickerDialog(
+            title = "Pilih Audio Eksternal (MP3 / M4A / AAC / WAV / URL)",
+            allowedExtensions = listOf("mp3", "m4a", "aac", "wav", "ogg", "flac"),
+            onFileSelected = { file ->
+                showExtAudioPicker = false
+                viewModel.loadExternalAudio(file.absolutePath)
+                Toast.makeText(context, "Audio eksternal berhasil dimuat!", Toast.LENGTH_SHORT).show()
+            },
+            onUrlSelected = { url ->
+                showExtAudioPicker = false
+                viewModel.loadExternalAudio(url)
+                Toast.makeText(context, "Audio eksternal URL dimuat!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showExtAudioPicker = false }
+        )
     }
 
     if (playerState.showDebugDialog) {
@@ -1627,6 +1718,10 @@ fun PlayerSurface(
                     if (playerView.player !== activePlayer) {
                         playerView.player = activePlayer
                     }
+                    val offsetDp = viewModel.playerState.value.subtitleOffsetDp
+                    val paddingPx = (offsetDp * playerView.resources.displayMetrics.density).toInt()
+                    playerView.subtitleView?.setPadding(0, 0, 0, paddingPx)
+
                     when (aspectRatioMode) {
                         AspectRatioMode.FIT -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         AspectRatioMode.CROP -> playerView.resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM

@@ -236,6 +236,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         playerManager.selectSubtitleTrack(track)
     }
 
+    fun loadExternalSubtitle(fileOrUrl: String) {
+        playerManager.loadExternalSubtitle(fileOrUrl)
+    }
+
+    fun loadExternalAudio(fileOrUrl: String) {
+        playerManager.loadExternalAudio(fileOrUrl)
+    }
+
+    fun setSubtitleOffset(offsetDp: Int) {
+        playerManager.setSubtitleOffset(offsetDp)
+        viewModelScope.launch {
+            preferencesManager.setSubtitleOffset(offsetDp)
+        }
+    }
+
     fun toggleScreenLock() {
         _isScreenLocked.value = !_isScreenLocked.value
         if (_isScreenLocked.value) {

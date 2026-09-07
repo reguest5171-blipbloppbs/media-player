@@ -31,6 +31,9 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_FOLLOW_ORIENTATION = booleanPreferencesKey("follow_orientation")
         val KEY_SWIPE_GESTURES = booleanPreferencesKey("swipe_gestures")
         val KEY_FAST_SEEK_SMOOTH = booleanPreferencesKey("fast_seek_smooth")
+        val KEY_LAST_TAB = intPreferencesKey("last_tab")
+        val KEY_LAST_FOLDER_PATH = stringPreferencesKey("last_folder_path")
+        val KEY_SUBTITLE_OFFSET = intPreferencesKey("subtitle_offset_dp")
     }
 
     val vaultSecurityManager = VaultSecurityManager(context)
@@ -85,6 +88,18 @@ class UserPreferencesManager(private val context: Context) {
 
     val fastSeekSmoothFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[KEY_FAST_SEEK_SMOOTH] ?: true
+    }
+
+    val lastTabFlow: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[KEY_LAST_TAB] ?: 0
+    }
+
+    val lastFolderPathFlow: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[KEY_LAST_FOLDER_PATH]
+    }
+
+    val subtitleOffsetFlow: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SUBTITLE_OFFSET] ?: 24
     }
 
     suspend fun setPinCode(pin: String) {
@@ -164,6 +179,28 @@ class UserPreferencesManager(private val context: Context) {
     suspend fun setSwipeGestures(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[KEY_SWIPE_GESTURES] = enabled
+        }
+    }
+
+    suspend fun setLastTab(tab: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_LAST_TAB] = tab
+        }
+    }
+
+    suspend fun setLastFolderPath(path: String?) {
+        context.dataStore.edit { preferences ->
+            if (path == null) {
+                preferences.remove(KEY_LAST_FOLDER_PATH)
+            } else {
+                preferences[KEY_LAST_FOLDER_PATH] = path
+            }
+        }
+    }
+
+    suspend fun setSubtitleOffset(offsetDp: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SUBTITLE_OFFSET] = offsetDp
         }
     }
 }

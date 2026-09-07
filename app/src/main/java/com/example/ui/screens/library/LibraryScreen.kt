@@ -222,30 +222,28 @@ fun LibraryScreen(
                     }
 
                     IconButton(
-                        onClick = {
-                            val nextMode = if (uiState.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
-                            viewModel.setViewMode(nextMode)
-                        },
-                        modifier = Modifier.testTag("view_mode_toggle_button")
+                        onClick = { showSortSheet = true },
+                        modifier = Modifier.testTag("sort_sheet_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Sort, contentDescription = "Pengatur Daftar & Layout")
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.setActiveTab(3) },
+                        modifier = Modifier.testTag("vault_lock_button")
                     ) {
                         Icon(
-                            imageVector = if (uiState.viewMode == ViewMode.GRID) Icons.Default.ViewList else Icons.Default.GridView,
-                            contentDescription = "Toggle Grid/List"
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Vault Lock",
+                            tint = if (uiState.isLockModeUnlocked) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurface
                         )
                     }
 
                     IconButton(
-                        onClick = { showSortSheet = true },
-                        modifier = Modifier.testTag("sort_sheet_button")
+                        onClick = { viewModel.setActiveTab(2) },
+                        modifier = Modifier.testTag("network_button")
                     ) {
-                        Icon(imageVector = Icons.Default.Sort, contentDescription = "Sort")
-                    }
-
-                    IconButton(
-                        onClick = { viewModel.scanMedia() },
-                        modifier = Modifier.testTag("refresh_scan_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh Scan")
+                        Icon(imageVector = Icons.Default.Cloud, contentDescription = "Network")
                     }
 
                     IconButton(
@@ -427,7 +425,9 @@ fun LibraryScreen(
     if (showSortSheet) {
         SortBottomSheet(
             currentSort = uiState.sortOption,
+            currentViewMode = uiState.viewMode,
             onSortSelected = { viewModel.setSortOption(it) },
+            onViewModeSelected = { viewModel.setViewMode(it) },
             onDismiss = { showSortSheet = false }
         )
     }

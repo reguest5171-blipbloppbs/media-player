@@ -131,14 +131,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val pin = preferencesManager.vaultSecurityManager.getOrRestorePin()
             val ext = preferencesManager.vaultExtensionFlow.first()
+            val savedSort = try { SortOption.valueOf(preferencesManager.sortOptionFlow.first()) } catch (_: Exception) { SortOption.DATE_DESC }
+            val savedView = try { ViewMode.valueOf(preferencesManager.viewModeFlow.first()) } catch (_: Exception) { ViewMode.GRID }
+            val savedTab = preferencesManager.lastTabFlow.first()
+            val savedFolderPath = preferencesManager.lastFolderPathFlow.first()
+
             _uiState.value = _uiState.value.copy(
                 hasPinConfigured = !pin.isNullOrBlank(),
-                vaultExtension = ext.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
+                vaultExtension = ext.trim().removePrefix(".").lowercase().ifBlank { "1ca" },
+                sortOption = savedSort,
+                viewMode = savedView,
+                activeTab = savedTab
             )
 
             val autoScan = preferencesManager.autoScanFlow.first()
             if (autoScan) {
                 scanMedia()
+                if (!savedFolderPath.isNullOrBlank()) {
+                    val foundFolder = folderList.first().find { it.path == savedFolderPath }
+                    if (foundFolder != null) {
+                        _uiState.value = _uiState.value.copy(selectedFolder = foundFolder)
+                    }
+                }
             }
             // Auto populate preset test stream URLs so user has instant test videos
             try {
@@ -198,14 +212,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setActiveTab(tab: Int) {
         _uiState.value = _uiState.value.copy(activeTab = tab, selectedFolder = null)
+        viewModelScope.launch {
+            preferencesManager.setLastTab(tab)
+            preferencesManager.setLastFolderPath(null)
+        }
     }
 
     fun selectFolder(folder: VideoFolder?) {
         _uiState.value = _uiState.value.copy(selectedFolder = folder)
+        viewModelScope.launch {
+            preferencesManager.setLastFolderPath(folder?.path)
+        }
     }
 
     fun clearSelectedFolder() {
         _uiState.value = _uiState.value.copy(selectedFolder = null)
+        viewModelScope.launch {
+            preferencesManager.setLastFolderPath(null)
+        }
     }
 
     // Lock Mode / PIN Management

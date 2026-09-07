@@ -97,7 +97,10 @@ data class PlayerState(
     val droppedFramesCount: Int = 0,
     val estimatedBitrateKbps: Long = 0L,
     val firstFrameRendered: Boolean = false,
-    val deviceInfo: String = ""
+    val deviceInfo: String = "",
+    val subtitleOffsetDp: Int = 24,
+    val externalSubtitleName: String? = null,
+    val externalAudioName: String? = null
 )
 
 @OptIn(UnstableApi::class)
@@ -685,6 +688,34 @@ class VlcPlayerEngine(
             val dur = mp.length.coerceAtLeast(0L)
             onStateUpdate(mp.isPlaying, false, pos, dur, dur, videoWidth, videoHeight, true, null)
         } catch (_: Exception) {}
+    }
+
+    fun addSlaveSubtitle(uriString: String) {
+        try {
+            val uri = if (uriString.startsWith("http://") || uriString.startsWith("https://") || uriString.startsWith("file://")) {
+                Uri.parse(uriString)
+            } else {
+                Uri.fromFile(java.io.File(uriString))
+            }
+            mediaPlayer?.addSlave(0, uri, true) // 0 = IMedia.Slave.Type.Subtitle
+            onDebugLog("[VLC_ENGINE] Slave subtitle ditambahkan ke VLC: $uriString")
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal menambah slave subtitle: ${e.message}")
+        }
+    }
+
+    fun addSlaveAudio(uriString: String) {
+        try {
+            val uri = if (uriString.startsWith("http://") || uriString.startsWith("https://") || uriString.startsWith("file://")) {
+                Uri.parse(uriString)
+            } else {
+                Uri.fromFile(java.io.File(uriString))
+            }
+            mediaPlayer?.addSlave(1, uri, true) // 1 = IMedia.Slave.Type.Audio
+            onDebugLog("[VLC_ENGINE] Slave audio ditambahkan ke VLC: $uriString")
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal menambah slave audio: ${e.message}")
+        }
     }
 
     fun release() {
@@ -1448,8 +1479,135 @@ class MediaPlayerManager(private val context: Context) {
         }
 
         // Local storage / MediaStore content:// videos:
+        val mediaItemBuilder = MediaItem.Builder().setUri(media.uri)
+        if (media.path.isNotBlank()) {
+            val sidecarSubtitles = findAutoSidecarSubtitles(media.path)
+            if (sidecarSubtitles.isNotEmpty()) {
+                addDebugLog("[SUBTITLE] Terdeteksi ${sidecarSubtitles.size} subtitle otomatis di folder video: ${sidecarSubtitles.joinToString { it.name }}")
+                val configs = sidecarSubtitles.map { subFile ->
+                    val mimeType = when (subFile.extension.lowercase()) {
+                        "vtt" -> MimeTypes.TEXT_VTT
+                        "ass", "ssa" -> MimeTypes.TEXT_SSA
+                        else -> MimeTypes.APPLICATION_SUBRIP
+                    }
+                    MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(subFile))
+                        .setMimeType(mimeType)
+                        .setLanguage(subFile.extension.ifBlank { "ind" })
+                        .setLabel(subFile.name)
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                }
+                mediaItemBuilder.setSubtitleConfigurations(configs)
+            }
+        }
+
         return DefaultMediaSourceFactory(context, extractorsFactory)
-            .createMediaSource(MediaItem.fromUri(media.uri))
+            .createMediaSource(mediaItemBuilder.build())
+    }
+
+    private fun findAutoSidecarSubtitles(videoPath: String): List<java.io.File> {
+        try {
+            val videoFile = java.io.File(videoPath)
+            val parentDir = videoFile.parentFile ?: return emptyList()
+            if (!parentDir.exists() || !parentDir.isDirectory) return emptyList()
+
+            val videoBaseName = videoFile.nameWithoutExtension.lowercase()
+            val subExts = setOf("srt", "vtt", "ass", "ssa", "sub")
+
+            return parentDir.listFiles()?.filter { f ->
+                if (!f.isFile) return@filter false
+                val ext = f.extension.lowercase()
+                if (!subExts.contains(ext)) return@filter false
+                val fName = f.nameWithoutExtension.lowercase()
+                fName.startsWith(videoBaseName)
+            } ?: emptyList()
+        } catch (_: Exception) {
+            return emptyList()
+        }
+    }
+
+    fun loadExternalSubtitle(fileOrUrl: String) {
+        val currentPos = _playerState.value.currentPositionMs
+        addDebugLog("[SUBTITLE] Memuat subtitle eksternal: $fileOrUrl")
+        val uri = if (fileOrUrl.startsWith("http://") || fileOrUrl.startsWith("https://")) {
+            Uri.parse(fileOrUrl)
+        } else {
+            Uri.fromFile(java.io.File(fileOrUrl))
+        }
+        val fileName = uri.lastPathSegment ?: "Subtitle Eksternal"
+
+        _playerState.value = _playerState.value.copy(externalSubtitleName = fileName)
+
+        when (activeDecoderMode) {
+            DecoderMode.VLC -> {
+                vlcPlayerEngine.addSlaveSubtitle(uri.toString())
+            }
+            else -> {
+                val player = exoPlayer ?: return
+                val ext = fileName.substringAfterLast(".", "srt").lowercase()
+                val mimeType = when (ext) {
+                    "vtt" -> MimeTypes.TEXT_VTT
+                    "ass", "ssa" -> MimeTypes.TEXT_SSA
+                    else -> MimeTypes.APPLICATION_SUBRIP
+                }
+                val subConfig = MediaItem.SubtitleConfiguration.Builder(uri)
+                    .setMimeType(mimeType)
+                    .setLabel(fileName)
+                    .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                    .build()
+
+                val currentMedia = currentMediaItem
+                if (currentMedia != null) {
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(currentMedia.uri)
+                        .setSubtitleConfigurations(listOf(subConfig))
+                        .build()
+                    player.setMediaItem(mediaItem, currentPos)
+                    player.prepare()
+                    player.play()
+                }
+            }
+        }
+    }
+
+    fun loadExternalAudio(fileOrUrl: String) {
+        val currentPos = _playerState.value.currentPositionMs
+        addDebugLog("[AUDIO] Memuat audio eksternal: $fileOrUrl")
+        val uri = if (fileOrUrl.startsWith("http://") || fileOrUrl.startsWith("https://")) {
+            Uri.parse(fileOrUrl)
+        } else {
+            Uri.fromFile(java.io.File(fileOrUrl))
+        }
+        val fileName = uri.lastPathSegment ?: "Audio Eksternal"
+
+        _playerState.value = _playerState.value.copy(externalAudioName = fileName)
+
+        when (activeDecoderMode) {
+            DecoderMode.VLC -> {
+                vlcPlayerEngine.addSlaveAudio(uri.toString())
+            }
+            else -> {
+                val player = exoPlayer ?: return
+                val extractorsFactory = createExtractorsFactory()
+                val audioMediaSource = ProgressiveMediaSource.Factory(
+                    DefaultDataSource.Factory(context),
+                    extractorsFactory
+                ).createMediaSource(MediaItem.fromUri(uri))
+
+                val currentMedia = currentMediaItem
+                if (currentMedia != null) {
+                    val videoMediaSource = createMediaSourceFor(currentMedia)
+                    val mergedSource = androidx.media3.exoplayer.source.MergingMediaSource(videoMediaSource, audioMediaSource)
+                    player.setMediaSource(mergedSource, currentPos)
+                    player.prepare()
+                    player.play()
+                }
+            }
+        }
+    }
+
+    fun setSubtitleOffset(offsetDp: Int) {
+        _playerState.value = _playerState.value.copy(subtitleOffsetDp = offsetDp)
     }
 
     fun switchToDecoder(decoderMode: DecoderMode, isUserAction: Boolean = false) {
@@ -1592,12 +1750,10 @@ class MediaPlayerManager(private val context: Context) {
     fun cycleDecoder() {
         val current = _playerState.value.decoderMode
         val next = when (current) {
-            DecoderMode.HW -> DecoderMode.VLC
-            DecoderMode.VLC -> DecoderMode.SYSTEM
-            DecoderMode.SYSTEM -> DecoderMode.HW_PLUS
-            DecoderMode.HW_PLUS -> DecoderMode.SW
-            DecoderMode.SW -> DecoderMode.FFMPEG
-            DecoderMode.FFMPEG -> DecoderMode.HW
+            DecoderMode.HW -> DecoderMode.HW_PLUS
+            DecoderMode.HW_PLUS -> DecoderMode.VLC
+            DecoderMode.VLC -> DecoderMode.HW
+            else -> DecoderMode.HW
         }
         switchToDecoder(next, isUserAction = true)
     }
