@@ -29,7 +29,13 @@ data class MainUiState(
     val isScanning: Boolean = false,
     val searchQuery: String = "",
     val sortOption: SortOption = SortOption.DATE_DESC,
+    val isSortAscending: Boolean = false,
     val viewMode: ViewMode = ViewMode.GRID,
+    val showThumbnails: Boolean = true,
+    val showDuration: Boolean = true,
+    val showSize: Boolean = true,
+    val showResolution: Boolean = true,
+    val showHiddenFiles: Boolean = false,
     val isLockModeUnlocked: Boolean = false,
     val hasPinConfigured: Boolean = false,
     val vaultExtension: String = "1ca",
@@ -77,6 +83,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Hidden files filter
+        if (!state.showHiddenFiles) {
+            list = list.filter { !it.displayName.startsWith(".") && !it.folderName.startsWith(".") }
+        }
+
         // Folder filter if active
         if (state.selectedFolder != null) {
             list = list.filter { it.folderPath == state.selectedFolder.path }
@@ -92,16 +103,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Sorting
+        // Sorting (respects isSortAscending or explicit direction)
+        val asc = state.isSortAscending
         when (state.sortOption) {
-            SortOption.DATE_DESC -> list.sortedByDescending { it.dateModified }
-            SortOption.DATE_ASC -> list.sortedBy { it.dateModified }
-            SortOption.NAME_ASC -> list.sortedBy { it.displayName.lowercase() }
-            SortOption.NAME_DESC -> list.sortedByDescending { it.displayName.lowercase() }
-            SortOption.SIZE_DESC -> list.sortedByDescending { it.sizeBytes }
-            SortOption.SIZE_ASC -> list.sortedBy { it.sizeBytes }
-            SortOption.DURATION_DESC -> list.sortedByDescending { it.durationMs }
-            SortOption.DURATION_ASC -> list.sortedBy { it.durationMs }
+            SortOption.NAME -> if (asc) list.sortedBy { it.displayName.lowercase() } else list.sortedByDescending { it.displayName.lowercase() }
+            SortOption.DATE -> if (asc) list.sortedBy { it.dateModified } else list.sortedByDescending { it.dateModified }
+            SortOption.SIZE -> if (asc) list.sortedBy { it.sizeBytes } else list.sortedByDescending { it.sizeBytes }
+            SortOption.DURATION -> if (asc) list.sortedBy { it.durationMs } else list.sortedByDescending { it.durationMs }
+            SortOption.RESOLUTION -> if (asc) list.sortedBy { it.width * it.height } else list.sortedByDescending { it.width * it.height }
+            SortOption.DATE_DESC -> if (!asc) list.sortedByDescending { it.dateModified } else list.sortedBy { it.dateModified }
+            SortOption.DATE_ASC -> if (!asc) list.sortedBy { it.dateModified } else list.sortedByDescending { it.dateModified }
+            SortOption.NAME_ASC -> if (!asc) list.sortedBy { it.displayName.lowercase() } else list.sortedByDescending { it.displayName.lowercase() }
+            SortOption.NAME_DESC -> if (!asc) list.sortedByDescending { it.displayName.lowercase() } else list.sortedBy { it.displayName.lowercase() }
+            SortOption.SIZE_DESC -> if (!asc) list.sortedByDescending { it.sizeBytes } else list.sortedBy { it.sizeBytes }
+            SortOption.SIZE_ASC -> if (!asc) list.sortedBy { it.sizeBytes } else list.sortedByDescending { it.sizeBytes }
+            SortOption.DURATION_DESC -> if (!asc) list.sortedByDescending { it.durationMs } else list.sortedBy { it.durationMs }
+            SortOption.DURATION_ASC -> if (!asc) list.sortedBy { it.durationMs } else list.sortedByDescending { it.durationMs }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -132,7 +149,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val pin = preferencesManager.vaultSecurityManager.getOrRestorePin()
             val ext = preferencesManager.vaultExtensionFlow.first()
             val savedSort = try { SortOption.valueOf(preferencesManager.sortOptionFlow.first()) } catch (_: Exception) { SortOption.DATE_DESC }
+            val savedSortAsc = preferencesManager.sortAscendingFlow.first()
             val savedView = try { ViewMode.valueOf(preferencesManager.viewModeFlow.first()) } catch (_: Exception) { ViewMode.GRID }
+            val savedThumbnails = preferencesManager.showThumbnailsFlow.first()
+            val savedDuration = preferencesManager.showDurationFlow.first()
+            val savedSize = preferencesManager.showSizeFlow.first()
+            val savedResolution = preferencesManager.showResolutionFlow.first()
+            val savedHiddenFiles = preferencesManager.showHiddenFilesFlow.first()
             val savedTab = preferencesManager.lastTabFlow.first()
             val savedFolderPath = preferencesManager.lastFolderPathFlow.first()
 
@@ -140,7 +163,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 hasPinConfigured = !pin.isNullOrBlank(),
                 vaultExtension = ext.trim().removePrefix(".").lowercase().ifBlank { "1ca" },
                 sortOption = savedSort,
+                isSortAscending = savedSortAsc,
                 viewMode = savedView,
+                showThumbnails = savedThumbnails,
+                showDuration = savedDuration,
+                showSize = savedSize,
+                showResolution = savedResolution,
+                showHiddenFiles = savedHiddenFiles,
                 activeTab = savedTab
             )
 
@@ -207,6 +236,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(viewMode = mode)
         viewModelScope.launch {
             preferencesManager.setViewMode(mode.name)
+        }
+    }
+
+    fun setSortAscending(ascending: Boolean) {
+        _uiState.value = _uiState.value.copy(isSortAscending = ascending)
+        viewModelScope.launch {
+            preferencesManager.setSortAscending(ascending)
+        }
+    }
+
+    fun setShowThumbnails(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(showThumbnails = enabled)
+        viewModelScope.launch {
+            preferencesManager.setShowThumbnails(enabled)
+        }
+    }
+
+    fun setShowDuration(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(showDuration = enabled)
+        viewModelScope.launch {
+            preferencesManager.setShowDuration(enabled)
+        }
+    }
+
+    fun setShowSize(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(showSize = enabled)
+        viewModelScope.launch {
+            preferencesManager.setShowSize(enabled)
+        }
+    }
+
+    fun setShowResolution(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(showResolution = enabled)
+        viewModelScope.launch {
+            preferencesManager.setShowResolution(enabled)
+        }
+    }
+
+    fun setShowHiddenFiles(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(showHiddenFiles = enabled)
+        viewModelScope.launch {
+            preferencesManager.setShowHiddenFiles(enabled)
         }
     }
 

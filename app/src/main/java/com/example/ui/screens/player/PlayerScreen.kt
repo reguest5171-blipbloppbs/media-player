@@ -279,6 +279,75 @@ fun PlayerScreen(
             viewModel = viewModel
         )
 
+        // Interactive Subtitle Layer & Drag Zone (MX Player style: geser atas/bawah atur posisi, geser kanan/kiri sinkronisasi waktu)
+        val hasActiveSubtitles = playerState.subtitleTracks.any { it.isSelected } || playerState.externalSubtitleName != null || playerState.subtitleCuesText.isNotEmpty()
+        if (hasActiveSubtitles && !isLocked) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = (playerState.subtitleOffsetDp + 36).dp)
+                    .pointerInput(Unit) {
+                        var totalSubX = 0f
+                        var totalSubY = 0f
+                        var isSubVert = false
+                        var isSubHoriz = false
+                        detectDragGestures(
+                            onDragStart = {
+                                totalSubX = 0f
+                                totalSubY = 0f
+                                isSubVert = false
+                                isSubHoriz = false
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                totalSubX += dragAmount.x
+                                totalSubY += dragAmount.y
+                                if (!isSubVert && !isSubHoriz) {
+                                    if (kotlin.math.abs(totalSubY) > 15f && kotlin.math.abs(totalSubY) > kotlin.math.abs(totalSubX)) {
+                                        isSubVert = true
+                                    } else if (kotlin.math.abs(totalSubX) > 15f && kotlin.math.abs(totalSubX) > kotlin.math.abs(totalSubY)) {
+                                        isSubHoriz = true
+                                    }
+                                }
+                                if (isSubVert) {
+                                    val deltaDp = (-dragAmount.y / 4f).toInt()
+                                    viewModel.onSubtitlePositionDrag(deltaDp)
+                                } else if (isSubHoriz) {
+                                    val deltaMs = (totalSubX / 10f * 100).toLong()
+                                    viewModel.onSubtitleSyncDrag(deltaMs)
+                                }
+                            },
+                            onDragEnd = {
+                                if (isSubHoriz) {
+                                    viewModel.onSubtitleSyncFinished()
+                                } else {
+                                    viewModel.hideGestureOverlay()
+                                }
+                            },
+                            onDragCancel = {
+                                viewModel.hideGestureOverlay()
+                            }
+                        )
+                    }
+                    .padding(horizontal = 24.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (playerState.subtitleCuesText.isNotBlank()) {
+                    Text(
+                        text = playerState.subtitleCuesText,
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .background(Color(0xAA000000), shape = RoundedCornerShape(6.dp))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
         // Loading & Diagnostic HUD Overlay
         if (playerState.isLoading && playerState.errorMessage == null) {
             Box(
@@ -601,6 +670,56 @@ fun PlayerScreen(
                                 text = "($deltaSign sec)",
                                 color = Color(0xFF81C784),
                                 fontSize = 13.sp
+                            )
+                        }
+                        GestureType.SUBTITLE_POSITION -> {
+                            Icon(
+                                imageVector = Icons.Default.Subtitles,
+                                contentDescription = "Subtitle Position",
+                                tint = Color(0xFFFF80AB),
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Posisi Subtitle",
+                                color = Color(0xFFFF80AB),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "${gestureState.valuePercent} dp",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        }
+                        GestureType.SUBTITLE_SYNC -> {
+                            val targetFormatted = formatTime(gestureState.seekTargetMs)
+                            val deltaMs = gestureState.seekDeltaMs
+                            val sign = if (deltaMs >= 0) "+$deltaMs" else "$deltaMs"
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Subtitle Sync",
+                                tint = Color(0xFF80D8FF),
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Sinkronisasi Subtitle",
+                                color = Color(0xFF80D8FF),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                            Text(
+                                text = "$sign ms",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                            Text(
+                                text = "Waktu video: $targetFormatted",
+                                color = Color.LightGray,
+                                fontSize = 12.sp
                             )
                         }
                         else -> Unit
@@ -1130,6 +1249,55 @@ fun PlayerScreen(
                             modifier = Modifier.weight(1f)
                         )
                         Text("Atas", fontSize = 11.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Sinkronisasi Waktu Subtitle (Sync Offset):",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf(-500L to "-0.5s", -100L to "-0.1s").forEach { (d, label) ->
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { viewModel.adjustSubtitleDelay(d) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                            ) {
+                                Text(label, fontSize = 11.sp)
+                            }
+                        }
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { viewModel.setSubtitleDelay(0L) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                        ) {
+                            Text("Reset", fontSize = 11.sp)
+                        }
+                        listOf(100L to "+0.1s", 500L to "+0.5s").forEach { (d, label) ->
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { viewModel.adjustSubtitleDelay(d) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                            ) {
+                                Text(label, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    if (playerState.subtitleDelayMs != 0L) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Offset Aktif: ${if (playerState.subtitleDelayMs > 0) "+" else ""}${playerState.subtitleDelayMs} ms (Video ikut geser)",
+                            fontSize = 11.sp,
+                            color = Color(0xFF80D8FF),
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))

@@ -19,6 +19,11 @@ enum class AspectRatioMode(val label: String) {
 }
 
 enum class SortOption(val title: String) {
+    NAME("Judul / Nama"),
+    DATE("Tanggal Dimodifikasi"),
+    SIZE("Ukuran File"),
+    DURATION("Panjang Durasi"),
+    RESOLUTION("Resolusi"),
     DATE_DESC("Newest First"),
     DATE_ASC("Oldest First"),
     NAME_ASC("Name (A to Z)"),
@@ -31,7 +36,8 @@ enum class SortOption(val title: String) {
 
 enum class ViewMode {
     GRID,
-    LIST
+    LIST,
+    COMPACT
 }
 
 enum class StreamType {

@@ -53,6 +53,11 @@ fun VideoListItem(
     video: VideoMediaItem,
     onClick: () -> Unit,
     onMenuAction: (VideoMenuAction) -> Unit,
+    showThumbnails: Boolean = true,
+    showDuration: Boolean = true,
+    showSize: Boolean = true,
+    showResolution: Boolean = true,
+    isCompact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -72,103 +77,114 @@ fun VideoListItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(if (isCompact) 4.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Thumbnail container
-            Box(
-                modifier = Modifier
-                    .size(width = 110.dp, height = 66.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF151928))
-            ) {
-                if (video.isEncrypted1ca) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF311B92), Color(0xFF004D40))
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Encrypted",
-                            tint = Color(0xFFFFD54F),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(video.uri)
-                            .videoFrameMillis(2000)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = video.displayName,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                // Duration badge
+            if (showThumbnails) {
                 Box(
                     modifier = Modifier
-                        .padding(4.dp)
-                        .align(Alignment.BottomEnd)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xDD000000))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                        .size(
+                            width = if (isCompact) 76.dp else 110.dp,
+                            height = if (isCompact) 46.dp else 66.dp
+                        )
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF151928))
                 ) {
-                    Text(
-                        text = video.formattedDuration,
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
+                    if (video.isEncrypted1ca) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF311B92), Color(0xFF004D40))
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Encrypted",
+                                tint = Color(0xFFFFD54F),
+                                modifier = Modifier.size(if (isCompact) 18.dp else 24.dp)
+                            )
+                        }
+                    } else {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(video.uri)
+                                .videoFrameMillis(2000)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = video.displayName,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
-            Spacer(modifier = Modifier.width(12.dp))
+                    // Duration badge
+                    if (showDuration) {
+                        Box(
+                            modifier = Modifier
+                                .padding(3.dp)
+                                .align(Alignment.BottomEnd)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xDD000000))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = video.formattedDuration,
+                                color = Color.White,
+                                fontSize = if (isCompact) 9.sp else 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(if (isCompact) 8.dp else 12.dp))
+            }
 
             // Details
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = video.displayName,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = if (isCompact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = video.resolutionTag,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = video.formattedSize,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    if (showResolution) {
+                        Text(
+                            text = video.resolutionTag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    if (showSize) {
+                        Text(
+                            text = video.formattedSize,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
                     Text(
                         text = video.folderName,
                         style = MaterialTheme.typography.bodySmall,

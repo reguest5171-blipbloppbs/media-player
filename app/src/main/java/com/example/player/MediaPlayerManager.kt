@@ -80,7 +80,7 @@ data class PlayerState(
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
     val playbackSpeed: Float = 1.0f,
-    val decoderMode: DecoderMode = DecoderMode.HW,
+    val decoderMode: DecoderMode = DecoderMode.HW_PLUS,
     val aspectRatioMode: AspectRatioMode = AspectRatioMode.FIT,
     val audioTracks: List<PlayerTrackInfo> = emptyList(),
     val subtitleTracks: List<PlayerTrackInfo> = emptyList(),
@@ -99,6 +99,8 @@ data class PlayerState(
     val firstFrameRendered: Boolean = false,
     val deviceInfo: String = "",
     val subtitleOffsetDp: Int = 24,
+    val subtitleDelayMs: Long = 0L,
+    val subtitleCuesText: String = "",
     val externalSubtitleName: String? = null,
     val externalAudioName: String? = null
 )
@@ -435,7 +437,8 @@ class VlcPlayerEngine(
     private val context: Context,
     private val onStateUpdate: (isPlaying: Boolean, isLoading: Boolean, currentPosMs: Long, durationMs: Long, bufferedPosMs: Long, width: Int, height: Int, firstFrame: Boolean, error: String?) -> Unit,
     private val onCompletion: () -> Unit,
-    private val onDebugLog: (String) -> Unit
+    private val onDebugLog: (String) -> Unit,
+    private val onTracksAvailable: ((subtitles: List<PlayerTrackInfo>, audio: List<PlayerTrackInfo>) -> Unit)? = null
 ) {
     private var libVLC: LibVLC? = null
     private var mediaPlayer: LibVlcMediaPlayer? = null
@@ -598,6 +601,13 @@ class VlcPlayerEngine(
                         val dur = mp.length.coerceAtLeast(0L)
                         val pos = mp.time.coerceAtLeast(0L)
                         onStateUpdate(true, false, pos, dur, dur, videoWidth, videoHeight, true, null)
+                        try {
+                            val subs = getSubtitleTracks()
+                            val auds = getAudioTracks()
+                            if (subs.isNotEmpty() || auds.isNotEmpty()) {
+                                onTracksAvailable?.invoke(subs, auds)
+                            }
+                        } catch (_: Throwable) {}
                     }
                     LibVlcMediaPlayer.Event.Paused -> {
                         isPlaying = false
@@ -625,6 +635,13 @@ class VlcPlayerEngine(
                             videoHeight = tracks.height
                             onDebugLog("[VLC_EVENT_VOUT] Resolusi terdeteksi oleh LibVLC: ${videoWidth}x${videoHeight}")
                         }
+                        try {
+                            val subs = getSubtitleTracks()
+                            val auds = getAudioTracks()
+                            if (subs.isNotEmpty() || auds.isNotEmpty()) {
+                                onTracksAvailable?.invoke(subs, auds)
+                            }
+                        } catch (_: Throwable) {}
                     }
                     LibVlcMediaPlayer.Event.TimeChanged -> {
                         val dur = mp.length.coerceAtLeast(0L)
@@ -718,6 +735,65 @@ class VlcPlayerEngine(
         }
     }
 
+    fun getSubtitleTracks(): List<PlayerTrackInfo> {
+        val mp = mediaPlayer ?: return emptyList()
+        val currentSpu = mp.spuTrack
+        val tracks = mp.spuTracks ?: return emptyList()
+        return tracks.filter { it.id != -1 }.mapIndexed { index, td ->
+            PlayerTrackInfo(
+                id = "vlc_spu_${td.id}",
+                label = td.name ?: "Subtitle ${index + 1}",
+                language = "",
+                isSelected = td.id == currentSpu,
+                trackGroupIndex = 0,
+                trackIndex = td.id
+            )
+        }
+    }
+
+    fun getAudioTracks(): List<PlayerTrackInfo> {
+        val mp = mediaPlayer ?: return emptyList()
+        val currentAudio = mp.audioTrack
+        val tracks = mp.audioTracks ?: return emptyList()
+        return tracks.filter { it.id != -1 }.mapIndexed { index, td ->
+            PlayerTrackInfo(
+                id = "vlc_audio_${td.id}",
+                label = td.name ?: "Audio ${index + 1}",
+                language = "",
+                isSelected = td.id == currentAudio,
+                trackGroupIndex = 0,
+                trackIndex = td.id
+            )
+        }
+    }
+
+    fun selectSubtitleTrack(trackId: Int) {
+        try {
+            mediaPlayer?.spuTrack = trackId
+            onDebugLog("[VLC_ENGINE] Subtitle track disetel ke ID: $trackId")
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal set spuTrack: ${e.message}")
+        }
+    }
+
+    fun selectAudioTrack(trackId: Int) {
+        try {
+            mediaPlayer?.audioTrack = trackId
+            onDebugLog("[VLC_ENGINE] Audio track disetel ke ID: $trackId")
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal set audioTrack: ${e.message}")
+        }
+    }
+
+    fun setSubtitleDelay(delayMs: Long) {
+        try {
+            mediaPlayer?.setSpuDelay(delayMs * 1000L)
+            onDebugLog("[VLC_ENGINE] Subtitle delay diatur: ${delayMs}ms")
+        } catch (e: Exception) {
+            onDebugLog("[VLC_ENGINE_ERROR] Gagal set subtitle delay: ${e.message}")
+        }
+    }
+
     fun release() {
         try {
             detachVout()
@@ -743,7 +819,7 @@ class MediaPlayerManager(private val context: Context) {
     private val debugLogs = mutableListOf<String>()
 
     private var currentMediaItem: VideoMediaItem? = null
-    private var activeDecoderMode: DecoderMode = DecoderMode.HW
+    private var activeDecoderMode: DecoderMode = DecoderMode.HW_PLUS
     private var fallbackAttempted: Boolean = false
     private var bufferingWatchdogJob: kotlinx.coroutines.Job? = null
 
@@ -790,6 +866,13 @@ class MediaPlayerManager(private val context: Context) {
         },
         onDebugLog = { log ->
             addDebugLog(log)
+        },
+        onTracksAvailable = { subs, audios ->
+            _playerState.value = _playerState.value.copy(
+                subtitleTracks = subs,
+                audioTracks = audios
+            )
+            addDebugLog("[VLC_TRACKS] LibVLC mendeteksi ${subs.size} subtitle dan ${audios.size} audio tracks 🎯")
         }
     )
 
@@ -952,11 +1035,12 @@ class MediaPlayerManager(private val context: Context) {
 
     private fun createExtractorsFactory(): DefaultExtractorsFactory {
         return DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(false)
+            .setConstantBitrateSeekingEnabled(true)
+            .setTextTrackTranscodingEnabled(true)
     }
 
     @Synchronized
-    fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW): ExoPlayer {
+    fun initializePlayer(decoderMode: DecoderMode = DecoderMode.HW_PLUS): ExoPlayer {
         try {
             exoPlayer?.let { p ->
                 p.stop()
@@ -1006,6 +1090,9 @@ class MediaPlayerManager(private val context: Context) {
                 buildUponParameters()
                     .setAllowAudioMixedMimeTypeAdaptiveness(true)
                     .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                    .setIgnoredTextSelectionFlags(0)
+                    .setPreferredTextLanguage(null)
+                    .setSelectUndeterminedTextLanguage(true)
             )
         }
 
@@ -1213,6 +1300,12 @@ class MediaPlayerManager(private val context: Context) {
                 addDebugLog("[TRACKS] Daftar track diperbarui: ${tracks.groups.size} kelompok track")
             }
 
+            override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                val cues = cueGroup.cues
+                val text = cues.joinToString("\n") { it.text?.toString() ?: "" }.trim()
+                _playerState.value = _playerState.value.copy(subtitleCuesText = text)
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 var isNetworkError = false
                 var httpStatusCode = 0
@@ -1241,6 +1334,25 @@ class MediaPlayerManager(private val context: Context) {
                         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
                         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
                 )
+
+                // Automatic Decoder Fallback: HW+ -> HW -> SW VLC
+                if (isDecoderError && !fallbackAttempted) {
+                    if (activeDecoderMode == DecoderMode.HW_PLUS) {
+                        fallbackAttempted = true
+                        addDebugLog("[AUTO_FALLBACK] Dekoder HW+ gagal (${error.errorCodeName}). Mengalihkan otomatis ke Hardware standar (HW)... ⚡")
+                        coroutineScope.launch {
+                            switchToDecoder(DecoderMode.HW, isUserAction = false)
+                        }
+                        return
+                    } else if (activeDecoderMode == DecoderMode.HW) {
+                        fallbackAttempted = true
+                        addDebugLog("[AUTO_FALLBACK] Dekoder Hardware gagal (${error.errorCodeName}). Mengalihkan otomatis ke Software VLC C++ Native... 🚀")
+                        coroutineScope.launch {
+                            switchToDecoder(DecoderMode.VLC, isUserAction = false)
+                        }
+                        return
+                    }
+                }
 
                 val errorDetails = buildString {
                     append("[ERROR] ${error.errorCodeName} (${error.errorCode}): ${error.message ?: "Unknown"}")
@@ -1373,7 +1485,27 @@ class MediaPlayerManager(private val context: Context) {
                         videoCodecName = media.codec,
                         firstFrameRendered = false
                     )
-                    vlcPlayerEngine.playMedia(media, startPositionMs)
+                    val targetMedia = if (media.streamType == StreamType.SMB || media.uri.scheme?.equals("smb", ignoreCase = true) == true) {
+                        try {
+                            val cleanUrl = if (media.uri.userInfo != null) {
+                                val s = media.uri.scheme ?: "smb"
+                                val h = media.uri.host ?: ""
+                                val p = if (media.uri.port > 0) ":${media.uri.port}" else ""
+                                val path = media.uri.path ?: ""
+                                "$s://$h$p$path"
+                            } else media.uri.toString()
+                            val cifs = SmbDataSource.createDefaultCifsContext(media.uri)
+                            val httpUrl = LocalMediaServer.registerSmbStream(cleanUrl, cifs)
+                            addDebugLog("[NETWORK_PROXY] Routing SMB ke LocalMediaServer loopback HTTP: $httpUrl")
+                            media.copy(uri = Uri.parse(httpUrl))
+                        } catch (e: Exception) {
+                            addDebugLog("[NETWORK_PROXY_ERROR] Gagal register SMB ke LocalMediaServer: ${e.message}")
+                            media
+                        }
+                    } else {
+                        media
+                    }
+                    vlcPlayerEngine.playMedia(targetMedia, startPositionMs)
                 }
                 else -> {
                     systemPlayerEngine.release()
@@ -1558,11 +1690,12 @@ class MediaPlayerManager(private val context: Context) {
 
                 val currentMedia = currentMediaItem
                 if (currentMedia != null) {
-                    val mediaItem = MediaItem.Builder()
-                        .setUri(currentMedia.uri)
-                        .setSubtitleConfigurations(listOf(subConfig))
-                        .build()
-                    player.setMediaItem(mediaItem, currentPos)
+                    val subSource = androidx.media3.exoplayer.source.SingleSampleMediaSource.Factory(
+                        DefaultDataSource.Factory(context)
+                    ).createMediaSource(subConfig, C.TIME_UNSET)
+                    val videoSource = createMediaSourceFor(currentMedia)
+                    val mergedSource = androidx.media3.exoplayer.source.MergingMediaSource(videoSource, subSource)
+                    player.setMediaSource(mergedSource, currentPos)
                     player.prepare()
                     player.play()
                 }
@@ -1759,6 +1892,15 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun selectAudioTrack(trackInfo: PlayerTrackInfo) {
+        if (activeDecoderMode == DecoderMode.VLC) {
+            vlcPlayerEngine.selectAudioTrack(trackInfo.trackIndex)
+            _playerState.value = _playerState.value.copy(
+                audioTracks = _playerState.value.audioTracks.map {
+                    it.copy(isSelected = it.trackIndex == trackInfo.trackIndex)
+                }
+            )
+            return
+        }
         val player = exoPlayer ?: return
         val tracks = player.currentTracks
         if (trackInfo.trackGroupIndex < tracks.groups.size) {
@@ -1774,6 +1916,15 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun selectSubtitleTrack(trackInfo: PlayerTrackInfo?) {
+        if (activeDecoderMode == DecoderMode.VLC) {
+            vlcPlayerEngine.selectSubtitleTrack(trackInfo?.trackIndex ?: -1)
+            _playerState.value = _playerState.value.copy(
+                subtitleTracks = _playerState.value.subtitleTracks.map {
+                    it.copy(isSelected = trackInfo != null && it.trackIndex == trackInfo.trackIndex)
+                }
+            )
+            return
+        }
         val player = exoPlayer ?: return
         if (trackInfo == null) {
             // Disable subtitles
@@ -1794,6 +1945,15 @@ class MediaPlayerManager(private val context: Context) {
                         .build()
                 }
             }
+        }
+    }
+
+    fun setSubtitleDelay(delayMs: Long) {
+        _playerState.value = _playerState.value.copy(subtitleDelayMs = delayMs)
+        if (activeDecoderMode == DecoderMode.VLC) {
+            vlcPlayerEngine.setSubtitleDelay(delayMs)
+        } else {
+            addDebugLog("[SUBTITLE] Delay subtitle diatur ke ${delayMs}ms")
         }
     }
 

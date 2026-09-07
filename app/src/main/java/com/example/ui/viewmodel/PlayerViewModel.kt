@@ -37,7 +37,9 @@ enum class GestureType {
     NONE,
     BRIGHTNESS,
     VOLUME,
-    SEEK
+    SEEK,
+    SUBTITLE_POSITION,
+    SUBTITLE_SYNC
 }
 
 data class DoubleTapRipple(
@@ -353,6 +355,68 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             seekTo(_gestureState.value.seekTargetMs)
         }
         hideGestureOverlay()
+    }
+
+    fun onSubtitlePositionDrag(deltaDp: Int) {
+        val cur = playerState.value.subtitleOffsetDp
+        val newOffset = (cur + deltaDp).coerceIn(0, 200)
+        setSubtitleOffset(newOffset)
+        _gestureState.value = GestureOverlayState(
+            isVisible = true,
+            type = GestureType.SUBTITLE_POSITION,
+            valuePercent = newOffset
+        )
+        hideGestureJob?.cancel()
+        hideGestureJob = viewModelScope.launch {
+            delay(1200)
+            _gestureState.value = _gestureState.value.copy(isVisible = false)
+        }
+    }
+
+    fun onSubtitleSyncDrag(deltaMs: Long) {
+        val current = playerState.value.currentPositionMs
+        val dur = playerState.value.durationMs
+        val target = (current + deltaMs).coerceIn(0L, dur)
+
+        _gestureState.value = GestureOverlayState(
+            isVisible = true,
+            type = GestureType.SUBTITLE_SYNC,
+            seekTargetMs = target,
+            seekDeltaMs = deltaMs
+        )
+        hideGestureJob?.cancel()
+    }
+
+    fun onSubtitleSyncFinished() {
+        if (_gestureState.value.type == GestureType.SUBTITLE_SYNC) {
+            seekTo(_gestureState.value.seekTargetMs)
+            playerManager.setSubtitleDelay(_gestureState.value.seekDeltaMs)
+        }
+        hideGestureOverlay()
+    }
+
+    fun setSubtitleDelay(delayMs: Long) {
+        playerManager.setSubtitleDelay(delayMs)
+    }
+
+    fun adjustSubtitleDelay(deltaMs: Long) {
+        val current = playerState.value.subtitleDelayMs
+        val newDelay = current + deltaMs
+        setSubtitleDelay(newDelay)
+        val curPos = playerState.value.currentPositionMs
+        val newPos = (curPos + deltaMs).coerceIn(0L, playerState.value.durationMs)
+        seekTo(newPos)
+        _gestureState.value = GestureOverlayState(
+            isVisible = true,
+            type = GestureType.SUBTITLE_SYNC,
+            seekTargetMs = newPos,
+            seekDeltaMs = newDelay
+        )
+        hideGestureJob?.cancel()
+        hideGestureJob = viewModelScope.launch {
+            delay(1200)
+            _gestureState.value = _gestureState.value.copy(isVisible = false)
+        }
     }
 
     private fun showGestureOverlay(type: GestureType, valuePercent: Int) {

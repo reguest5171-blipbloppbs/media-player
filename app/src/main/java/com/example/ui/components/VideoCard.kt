@@ -55,6 +55,10 @@ fun VideoCard(
     video: VideoMediaItem,
     onClick: () -> Unit,
     onMenuAction: (VideoMenuAction) -> Unit,
+    showThumbnails: Boolean = true,
+    showDuration: Boolean = true,
+    showSize: Boolean = true,
+    showResolution: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -73,116 +77,122 @@ fun VideoCard(
     ) {
         Column {
             // Thumbnail container
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 10f)
-                    .background(Color(0xFF151928))
-            ) {
-                if (video.isEncrypted1ca) {
-                    // Encrypted .1ca Vault visual
+            if (showThumbnails) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 10f)
+                        .background(Color(0xFF151928))
+                ) {
+                    if (video.isEncrypted1ca) {
+                        // Encrypted .1ca Vault visual
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(Color(0xFF311B92), Color(0xFF004D40))
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Encrypted 1ca",
+                                    tint = Color(0xFFFFD54F),
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = ".1CA ENCRYPTED",
+                                    color = Color(0xFFFFD54F),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    } else {
+                        // Normal media thumbnail
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(video.uri)
+                                .videoFrameMillis(2000)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = video.displayName,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    // Gradient overlay at bottom of thumbnail
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .align(Alignment.BottomCenter)
                             .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF311B92), Color(0xFF004D40))
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color(0xCC000000))
                                 )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Encrypted 1ca",
-                                tint = Color(0xFFFFD54F),
-                                modifier = Modifier.size(36.dp)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                    )
+
+                    // Resolution badge (top-left)
+                    if (showResolution) {
+                        Box(
+                            modifier = Modifier
+                                .padding(6.dp)
+                                .align(Alignment.TopStart)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xCC0D47A1))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
                             Text(
-                                text = ".1CA ENCRYPTED",
-                                color = Color(0xFFFFD54F),
-                                fontSize = 11.sp,
+                                text = video.resolutionTag,
+                                color = Color.White,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
-                } else {
-                    // Normal media thumbnail
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(video.uri)
-                            .videoFrameMillis(2000)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = video.displayName,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
 
-                // Gradient overlay at bottom of thumbnail
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                        .align(Alignment.BottomCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, Color(0xCC000000))
+                    // Duration badge (bottom-right)
+                    if (showDuration) {
+                        Box(
+                            modifier = Modifier
+                                .padding(6.dp)
+                                .align(Alignment.BottomEnd)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xDD000000))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = video.formattedDuration,
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
+                        }
+                    }
+
+                    // Play icon overlay in center
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x66000000)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
                         )
-                )
-
-                // Resolution badge (top-left)
-                Box(
-                    modifier = Modifier
-                        .padding(6.dp)
-                        .align(Alignment.TopStart)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xCC0D47A1))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = video.resolutionTag,
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // Duration badge (bottom-right)
-                Box(
-                    modifier = Modifier
-                        .padding(6.dp)
-                        .align(Alignment.BottomEnd)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xDD000000))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = video.formattedDuration,
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                // Play icon overlay in center
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(32.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0x66000000)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Play",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    }
                 }
             }
 
@@ -204,18 +214,20 @@ fun VideoCard(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = video.formattedSize,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "•",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        if (showSize) {
+                            Text(
+                                text = video.formattedSize,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "•",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
                         Text(
                             text = video.folderName,
                             style = MaterialTheme.typography.bodySmall,

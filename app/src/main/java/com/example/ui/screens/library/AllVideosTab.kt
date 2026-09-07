@@ -41,6 +41,10 @@ fun AllVideosTab(
     videos: List<VideoMediaItem>,
     viewMode: ViewMode,
     isScanning: Boolean,
+    showThumbnails: Boolean = true,
+    showDuration: Boolean = true,
+    showSize: Boolean = true,
+    showResolution: Boolean = true,
     onVideoClick: (VideoMediaItem) -> Unit,
     onVideoMenuAction: (VideoMediaItem, VideoMenuAction) -> Unit,
     onScanClick: () -> Unit,
@@ -122,23 +126,33 @@ fun AllVideosTab(
                 VideoCard(
                     video = video,
                     onClick = { onVideoClick(video) },
-                    onMenuAction = { action -> onVideoMenuAction(video, action) }
+                    onMenuAction = { action -> onVideoMenuAction(video, action) },
+                    showThumbnails = showThumbnails,
+                    showDuration = showDuration,
+                    showSize = showSize,
+                    showResolution = showResolution
                 )
             }
         }
     } else {
+        val isCompact = (viewMode == ViewMode.COMPACT)
         LazyColumn(
             modifier = modifier
                 .fillMaxSize()
-                .testTag("videos_list"),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .testTag(if (isCompact) "videos_compact_list" else "videos_list"),
+            contentPadding = PaddingValues(if (isCompact) 8.dp else 12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isCompact) 4.dp else 8.dp)
         ) {
             items(videos, key = { it.id }) { video ->
                 VideoListItem(
                     video = video,
                     onClick = { onVideoClick(video) },
-                    onMenuAction = { action -> onVideoMenuAction(video, action) }
+                    onMenuAction = { action -> onVideoMenuAction(video, action) },
+                    showThumbnails = showThumbnails,
+                    showDuration = showDuration,
+                    showSize = showSize,
+                    showResolution = showResolution,
+                    isCompact = isCompact
                 )
             }
         }

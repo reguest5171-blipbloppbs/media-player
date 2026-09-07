@@ -310,6 +310,10 @@ fun LibraryScreen(
                         videos = displayedVideos,
                         viewMode = uiState.viewMode,
                         isScanning = uiState.isScanning,
+                        showThumbnails = uiState.showThumbnails,
+                        showDuration = uiState.showDuration,
+                        showSize = uiState.showSize,
+                        showResolution = uiState.showResolution,
                         onVideoClick = { video -> onPlayVideo(video, displayedVideos) },
                         onVideoMenuAction = { video, action ->
                             activeActionVideo = video
@@ -332,6 +336,10 @@ fun LibraryScreen(
                         selectedFolder = uiState.selectedFolder,
                         videosInSelectedFolder = videosInFolder,
                         viewMode = uiState.viewMode,
+                        showThumbnails = uiState.showThumbnails,
+                        showDuration = uiState.showDuration,
+                        showSize = uiState.showSize,
+                        showResolution = uiState.showResolution,
                         isLockUnlocked = uiState.isLockModeUnlocked,
                         onLockClick = {
                             if (uiState.isLockModeUnlocked) {
@@ -376,7 +384,7 @@ fun LibraryScreen(
                         onNavigateFtp = { path -> viewModel.navigateFtp(path) },
                         onCloseFtp = { viewModel.closeFtpBrowser() },
                         onPlayFtpFile = { server, file ->
-                            val streamItem = viewModel.networkRepository.buildNetworkVideoItem(file, server.name)
+                            val streamItem = viewModel.networkRepository.buildNetworkVideoItem(file, server.name, server.type)
                             onPlayVideo(streamItem, listOf(streamItem))
                         },
                         onPlayBookmark = { bookmark ->
@@ -425,9 +433,21 @@ fun LibraryScreen(
     if (showSortSheet) {
         SortBottomSheet(
             currentSort = uiState.sortOption,
+            isSortAscending = uiState.isSortAscending,
             currentViewMode = uiState.viewMode,
+            showThumbnails = uiState.showThumbnails,
+            showDuration = uiState.showDuration,
+            showSize = uiState.showSize,
+            showResolution = uiState.showResolution,
+            showHiddenFiles = uiState.showHiddenFiles,
             onSortSelected = { viewModel.setSortOption(it) },
+            onSortDirectionChanged = { viewModel.setSortAscending(it) },
             onViewModeSelected = { viewModel.setViewMode(it) },
+            onToggleThumbnails = { viewModel.setShowThumbnails(it) },
+            onToggleDuration = { viewModel.setShowDuration(it) },
+            onToggleSize = { viewModel.setShowSize(it) },
+            onToggleResolution = { viewModel.setShowResolution(it) },
+            onToggleHiddenFiles = { viewModel.setShowHiddenFiles(it) },
             onDismiss = { showSortSheet = false }
         )
     }

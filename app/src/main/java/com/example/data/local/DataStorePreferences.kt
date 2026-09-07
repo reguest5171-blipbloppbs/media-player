@@ -28,6 +28,12 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_SKIP_INTERVAL = intPreferencesKey("skip_interval_seconds")
         val KEY_SORT_OPTION = stringPreferencesKey("sort_option")
         val KEY_VIEW_MODE = stringPreferencesKey("view_mode")
+        val KEY_SORT_ASCENDING = booleanPreferencesKey("sort_ascending")
+        val KEY_SHOW_THUMBNAILS = booleanPreferencesKey("show_thumbnails")
+        val KEY_SHOW_DURATION = booleanPreferencesKey("show_duration")
+        val KEY_SHOW_SIZE = booleanPreferencesKey("show_size")
+        val KEY_SHOW_RESOLUTION = booleanPreferencesKey("show_resolution")
+        val KEY_SHOW_HIDDEN_FILES = booleanPreferencesKey("show_hidden_files")
         val KEY_FOLLOW_ORIENTATION = booleanPreferencesKey("follow_orientation")
         val KEY_SWIPE_GESTURES = booleanPreferencesKey("swipe_gestures")
         val KEY_FAST_SEEK_SMOOTH = booleanPreferencesKey("fast_seek_smooth")
@@ -55,7 +61,7 @@ class UserPreferencesManager(private val context: Context) {
     }
 
     val defaultDecoderFlow: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[KEY_DEFAULT_DECODER] ?: "HW"
+        preferences[KEY_DEFAULT_DECODER] ?: "HW_PLUS"
     }
 
     val sortOptionFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -64,6 +70,30 @@ class UserPreferencesManager(private val context: Context) {
 
     val viewModeFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[KEY_VIEW_MODE] ?: "GRID"
+    }
+
+    val sortAscendingFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SORT_ASCENDING] ?: false
+    }
+
+    val showThumbnailsFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SHOW_THUMBNAILS] ?: true
+    }
+
+    val showDurationFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SHOW_DURATION] ?: true
+    }
+
+    val showSizeFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SHOW_SIZE] ?: true
+    }
+
+    val showResolutionFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SHOW_RESOLUTION] ?: true
+    }
+
+    val showHiddenFilesFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_SHOW_HIDDEN_FILES] ?: false
     }
 
     val autoScanFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
@@ -149,6 +179,42 @@ class UserPreferencesManager(private val context: Context) {
     suspend fun setViewMode(mode: String) {
         context.dataStore.edit { preferences ->
             preferences[KEY_VIEW_MODE] = mode
+        }
+    }
+
+    suspend fun setSortAscending(ascending: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SORT_ASCENDING] = ascending
+        }
+    }
+
+    suspend fun setShowThumbnails(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_THUMBNAILS] = enabled
+        }
+    }
+
+    suspend fun setShowDuration(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_DURATION] = enabled
+        }
+    }
+
+    suspend fun setShowSize(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_SIZE] = enabled
+        }
+    }
+
+    suspend fun setShowResolution(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_RESOLUTION] = enabled
+        }
+    }
+
+    suspend fun setShowHiddenFiles(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_HIDDEN_FILES] = enabled
         }
     }
 

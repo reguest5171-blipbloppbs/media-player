@@ -10,6 +10,7 @@ import jcifs.config.PropertyConfiguration
 import jcifs.context.BaseContext
 import jcifs.smb.NtlmPasswordAuthenticator
 import jcifs.smb.SmbFile
+import jcifs.smb.SmbRandomAccessFile
 import java.io.InputStream
 import java.util.Properties
 
@@ -18,6 +19,7 @@ class SmbDataSource(
 ) : BaseDataSource(/* isNetwork = */ true) {
 
     private var smbFile: SmbFile? = null
+    private var smbRaf: SmbRandomAccessFile? = null
     private var inputStream: InputStream? = null
     private var uri: Uri? = null
     private var bytesRemaining: Long = 0
@@ -43,11 +45,27 @@ class SmbDataSource(
         smbFile = smb
 
         val totalLength = try { smb.length() } catch (_: Exception) { C.LENGTH_UNSET.toLong() }
-        val stream = smb.inputStream
-        if (dataSpec.position > 0) {
-            stream.skip(dataSpec.position)
+
+        // Use SmbRandomAccessFile for instant seek support in H.265 / MKV / MP4
+        try {
+            val raf = SmbRandomAccessFile(smb, "r")
+            smbRaf = raf
+            if (dataSpec.position > 0) {
+                raf.seek(dataSpec.position)
+            }
+        } catch (_: Exception) {
+            // Fallback to sequential stream if RAF not supported
+            val stream = smb.inputStream
+            if (dataSpec.position > 0) {
+                var skipped = 0L
+                while (skipped < dataSpec.position) {
+                    val s = stream.skip(dataSpec.position - skipped)
+                    if (s <= 0) break
+                    skipped += s
+                }
+            }
+            inputStream = stream
         }
-        inputStream = stream
 
         bytesRemaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
             dataSpec.length
@@ -71,8 +89,14 @@ class SmbDataSource(
             minOf(bytesRemaining, length.toLong()).toInt()
         }
 
-        val stream = inputStream ?: return C.RESULT_END_OF_INPUT
-        val bytesRead = stream.read(buffer, offset, bytesToRead)
+        val raf = smbRaf
+        val bytesRead = if (raf != null) {
+            raf.read(buffer, offset, bytesToRead)
+        } else {
+            val stream = inputStream ?: return C.RESULT_END_OF_INPUT
+            stream.read(buffer, offset, bytesToRead)
+        }
+
         if (bytesRead == -1) {
             return C.RESULT_END_OF_INPUT
         }
@@ -88,6 +112,11 @@ class SmbDataSource(
 
     override fun close() {
         uri = null
+        try {
+            smbRaf?.close()
+        } catch (_: Exception) {}
+        smbRaf = null
+
         try {
             inputStream?.close()
         } catch (_: Exception) {}
