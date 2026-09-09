@@ -190,6 +190,7 @@ class NetworkMediaRepository(
     ): Result<List<NetworkFileItem>> {
         val ftp = FTPClient()
         try {
+            ftp.controlEncoding = "UTF-8"
             ftp.defaultTimeout = 5000
             ftp.connectTimeout = 5000
             ftp.setDataTimeout(java.time.Duration.ofMillis(5000))
@@ -204,6 +205,10 @@ class NetworkMediaRepository(
             if (!loginSuccess) {
                 return Result.failure(IOException("FTP Login gagal. Periksa username & password atau aktifkan Anonymous mode."))
             }
+
+            try {
+                ftp.sendCommand("OPTS UTF8", "ON")
+            } catch (_: Exception) {}
 
             ftp.enterLocalPassiveMode()
             ftp.setFileType(FTP.BINARY_FILE_TYPE)
@@ -224,7 +229,8 @@ class NetworkMediaRepository(
                     val authPart = if (!server.isAnonymous && server.username.isNotBlank()) {
                         "${Uri.encode(server.username)}:${Uri.encode(server.password)}@"
                     } else ""
-                    val streamUrl = "ftp://${authPart}${server.host}:${server.port}${fullPath}"
+                    val encodedPath = fullPath.split("/").joinToString("/") { Uri.encode(it) }
+                    val streamUrl = "ftp://${authPart}${server.host}:${server.port}$encodedPath"
 
                     resultList.add(
                         NetworkFileItem(

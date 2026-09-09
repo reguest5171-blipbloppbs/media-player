@@ -40,6 +40,7 @@ class UserPreferencesManager(private val context: Context) {
         val KEY_LAST_TAB = intPreferencesKey("last_tab")
         val KEY_LAST_FOLDER_PATH = stringPreferencesKey("last_folder_path")
         val KEY_SUBTITLE_OFFSET = intPreferencesKey("subtitle_offset_dp")
+        val KEY_LOCAL_DISPLAY_MODE = stringPreferencesKey("local_display_mode")
     }
 
     val vaultSecurityManager = VaultSecurityManager(context)
@@ -130,6 +131,10 @@ class UserPreferencesManager(private val context: Context) {
 
     val subtitleOffsetFlow: Flow<Int> = context.dataStore.data.map { preferences ->
         preferences[KEY_SUBTITLE_OFFSET] ?: 24
+    }
+
+    val localDisplayModeFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[KEY_LOCAL_DISPLAY_MODE] ?: "FOLDERS"
     }
 
     suspend fun setPinCode(pin: String) {
@@ -267,6 +272,12 @@ class UserPreferencesManager(private val context: Context) {
     suspend fun setSubtitleOffset(offsetDp: Int) {
         context.dataStore.edit { preferences ->
             preferences[KEY_SUBTITLE_OFFSET] = offsetDp
+        }
+    }
+
+    suspend fun setLocalDisplayMode(mode: String) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_LOCAL_DISPLAY_MODE] = mode
         }
     }
 }

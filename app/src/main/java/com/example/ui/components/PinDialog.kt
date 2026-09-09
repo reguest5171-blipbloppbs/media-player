@@ -97,7 +97,9 @@ fun PinDialog(
     var showExtensionStep by remember { mutableStateOf(false) }
     var isForgotPinMode by remember { mutableStateOf(false) }
 
-    var customExtInput by remember { mutableStateOf(initialVaultExtension) }
+    var customExtInput by remember {
+        mutableStateOf(if (isSettingNewPin || mode == PinDialogMode.SETUP_NEW) "" else initialVaultExtension)
+    }
 
     var oldPinInput by remember { mutableStateOf("") }
     var newPinInput by remember { mutableStateOf("") }
@@ -348,7 +350,7 @@ fun PinDialog(
                 val title = when {
                     isForgotPinMode -> "Pemulihan Lupa PIN"
                     showSecurityQuestionStep -> "Pertanyaan Keamanan"
-                    showExtensionStep -> "Ekstensi Enkripsi Video"
+                    showExtensionStep -> "Tentukan Ekstensi Kustom (Opsional)"
                     else -> when (mode) {
                         PinDialogMode.UNLOCK -> "Mode Kunci (.1ca Vault)"
                         PinDialogMode.SETUP_NEW -> if (step == 0) "Buat 4-Digit PIN Keamanan" else "Konfirmasi PIN Baru"
@@ -363,7 +365,7 @@ fun PinDialog(
                 val subtitle = when {
                     isForgotPinMode -> savedSecurityQuestion ?: "Masukkan jawaban pertanyaan keamanan Anda"
                     showSecurityQuestionStep -> "Pertanyaan ini digunakan untuk memulihkan PIN jika Anda lupa"
-                    showExtensionStep -> "Ekstensi ini membaca file video terenkripsi di folder lokal & jaringan"
+                    showExtensionStep -> "Bisa dikosongkan jika tidak ingin mengubah ekstensi video kustom"
                     else -> when (mode) {
                         PinDialogMode.UNLOCK -> "Masukkan 4-digit PIN untuk membuka video terenkripsi"
                         PinDialogMode.SETUP_NEW -> if (step == 0) "PIN akan disimpan permanen & melindungi video terenkripsi" else "Ketik ulang PIN yang sama untuk verifikasi"
@@ -571,7 +573,8 @@ fun PinDialog(
                             customExtInput = it
                             errorMessage = null
                         },
-                        label = { Text("Ekstensi Video") },
+                        label = { Text("Ekstensi Video (Opsional)") },
+                        placeholder = { Text("Kosongkan untuk bawaan") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()

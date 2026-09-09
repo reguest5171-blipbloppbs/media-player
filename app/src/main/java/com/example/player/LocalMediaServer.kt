@@ -4,6 +4,8 @@ import android.net.Uri
 import jcifs.CIFSContext
 import jcifs.smb.SmbFile
 import jcifs.smb.SmbRandomAccessFile
+import org.apache.commons.net.ftp.FTP
+import org.apache.commons.net.ftp.FTPClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -115,6 +117,117 @@ object LocalMediaServer {
         return "http://127.0.0.1:$port/$key"
     }
 
+    fun registerFtpStream(ftpUri: Uri, fallbackLength: Long = -1L): String {
+        val port = start()
+        val key = "ftp_" + Math.abs(ftpUri.toString().hashCode())
+
+        activeStreams[key] = object : StreamSource {
+            private val host = ftpUri.host ?: "127.0.0.1"
+            private val ftpPort = if (ftpUri.port > 0) ftpUri.port else 21
+            private var cachedLength: Long = if (fallbackLength > 0) fallbackLength else -1L
+
+            private fun getCredentials(): Pair<String, String> {
+                var user = "anonymous"
+                var pass = "anonymous"
+                val userInfo = ftpUri.userInfo
+                if (!userInfo.isNullOrBlank() && userInfo.contains(":")) {
+                    val parts = userInfo.split(":", limit = 2)
+                    user = Uri.decode(parts[0])
+                    pass = Uri.decode(parts[1])
+                }
+                return Pair(user, pass)
+            }
+
+            private fun connectFtp(): FTPClient {
+                val ftp = FTPClient()
+                ftp.controlEncoding = "UTF-8"
+                ftp.connectTimeout = 8000
+                ftp.defaultTimeout = 8000
+                ftp.setDataTimeout(java.time.Duration.ofMillis(8000))
+                ftp.connect(host, ftpPort)
+                val (user, pass) = getCredentials()
+                val ok = ftp.login(user, pass)
+                if (!ok) {
+                    ftp.disconnect()
+                    throw java.io.IOException("FTP Login gagal untuk user: $user")
+                }
+                try {
+                    ftp.sendCommand("OPTS UTF8", "ON")
+                } catch (_: Exception) {}
+                ftp.enterLocalPassiveMode()
+                ftp.setFileType(FTP.BINARY_FILE_TYPE)
+                return ftp
+            }
+
+            override val totalLength: Long
+                get() {
+                    if (cachedLength > 0) return cachedLength
+                    var ftp: FTPClient? = null
+                    try {
+                        ftp = connectFtp()
+                        val fullPath = Uri.decode(ftpUri.path ?: "/")
+                        val files = ftp.listFiles(fullPath)
+                        if (files != null && files.isNotEmpty()) {
+                            cachedLength = files[0].size
+                        }
+                    } catch (_: Exception) {}
+                    finally {
+                        try { ftp?.disconnect() } catch (_: Exception) {}
+                    }
+                    return cachedLength
+                }
+
+            override val mimeType: String
+                get() {
+                    val name = (ftpUri.path ?: "").lowercase()
+                    return when {
+                        name.endsWith(".mp4") -> "video/mp4"
+                        name.endsWith(".mkv") -> "video/x-matroska"
+                        name.endsWith(".ts") -> "video/mp2t"
+                        name.endsWith(".webm") -> "video/webm"
+                        name.endsWith(".avi") -> "video/x-msvideo"
+                        name.endsWith(".mov") -> "video/quicktime"
+                        name.endsWith(".flv") -> "video/x-flv"
+                        else -> "video/*"
+                    }
+                }
+
+            override fun readRange(start: Long, length: Long, output: OutputStream) {
+                var ftp: FTPClient? = null
+                var inputStream: java.io.InputStream? = null
+                try {
+                    ftp = connectFtp()
+                    if (start > 0) {
+                        ftp.setRestartOffset(start)
+                    }
+                    val fullPath = Uri.decode(ftpUri.path ?: "/")
+                    inputStream = ftp.retrieveFileStream(fullPath)
+                        ?: throw java.io.IOException("Gagal membuka stream file FTP: $fullPath")
+
+                    val buffer = ByteArray(64 * 1024)
+                    var remaining = length
+                    while (remaining > 0) {
+                        val toRead = minOf(remaining, buffer.size.toLong()).toInt()
+                        val bytesRead = inputStream.read(buffer, 0, toRead)
+                        if (bytesRead == -1) break
+                        output.write(buffer, 0, bytesRead)
+                        remaining -= bytesRead
+                    }
+                    output.flush()
+                } finally {
+                    try { inputStream?.close() } catch (_: Exception) {}
+                    try {
+                        ftp?.completePendingCommand()
+                        ftp?.logout()
+                        ftp?.disconnect()
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        return "http://127.0.0.1:$port/$key"
+    }
+
     private fun handleClient(socket: Socket) {
         try {
             socket.soTimeout = 15000
@@ -123,15 +236,16 @@ object LocalMediaServer {
 
             val requestLine = reader.readLine() ?: return
             val parts = requestLine.split(" ")
-            if (parts.size < 2 || parts[0] != "GET") {
+            val method = parts.getOrNull(0)?.uppercase() ?: ""
+            if (method != "GET" && method != "HEAD") {
                 socket.close()
                 return
             }
 
-            val pathKey = parts[1].trim().removePrefix("/").substringBefore("?")
+            val pathKey = parts.getOrNull(1)?.trim()?.removePrefix("/")?.substringBefore("?") ?: ""
             val source = activeStreams[pathKey]
             if (source == null) {
-                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".toByteArray())
+                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                 out.flush()
                 socket.close()
                 return
@@ -169,7 +283,9 @@ object LocalMediaServer {
                 }
                 out.write(responseHeaders.toByteArray())
                 out.flush()
-                source.readRange(rangeStart, contentLength, out)
+                if (method == "GET") {
+                    source.readRange(rangeStart, contentLength, out)
+                }
             } else {
                 val responseHeaders = buildString {
                     append("HTTP/1.1 200 OK\r\n")
@@ -182,7 +298,9 @@ object LocalMediaServer {
                 }
                 out.write(responseHeaders.toByteArray())
                 out.flush()
-                source.readRange(0, if (total > 0) total else Long.MAX_VALUE, out)
+                if (method == "GET") {
+                    source.readRange(0, if (total > 0) total else Long.MAX_VALUE, out)
+                }
             }
         } catch (_: Exception) {
             // Socket or client disconnect

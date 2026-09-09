@@ -457,6 +457,11 @@ class VlcPlayerEngine(
                 "--no-skip-frames",
                 "--network-caching=3000",
                 "--file-caching=3000",
+                "--live-caching=3000",
+                "--http-caching=3000",
+                "--http-reconnect",
+                "--http-continuous",
+                "--http-user-agent=Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
                 "--avcodec-hw=none",
                 "--avcodec-threads=0",
                 "-vv"
@@ -578,6 +583,10 @@ class VlcPlayerEngine(
             media.setHWDecoderEnabled(false, false)
             media.addOption(":file-caching=3000")
             media.addOption(":network-caching=3000")
+            media.addOption(":http-caching=3000")
+            media.addOption(":http-reconnect")
+            media.addOption(":http-continuous")
+            media.addOption(":http-user-agent=Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
             media.addOption(":clock-jitter=0")
             media.addOption(":clock-synchro=0")
             media.addOption(":avcodec-threads=0")
@@ -820,8 +829,74 @@ class MediaPlayerManager(private val context: Context) {
 
     private var currentMediaItem: VideoMediaItem? = null
     private var activeDecoderMode: DecoderMode = DecoderMode.HW_PLUS
-    private var fallbackAttempted: Boolean = false
+    private var fallbackAttemptedToVlc: Boolean = false
+    private var fallbackAttemptedFromVlc: Boolean = false
     private var bufferingWatchdogJob: kotlinx.coroutines.Job? = null
+
+    private fun sanitizeUrlForVlc(urlStr: String): String {
+        return try {
+            if (urlStr.contains(" ") || urlStr.any { it.code > 127 }) {
+                val uri = Uri.parse(urlStr)
+                val scheme = uri.scheme ?: "http"
+                val host = uri.host ?: ""
+                val port = if (uri.port > 0) ":${uri.port}" else ""
+                val path = uri.path ?: ""
+                val encodedPath = path.split("/").joinToString("/") { segment ->
+                    Uri.encode(segment)
+                }
+                val query = if (uri.query != null) "?${uri.query}" else ""
+                "$scheme://$host$port$encodedPath$query"
+            } else {
+                urlStr
+            }
+        } catch (_: Exception) {
+            urlStr.replace(" ", "%20")
+        }
+    }
+
+    private fun prepareMediaForVlc(media: VideoMediaItem): VideoMediaItem {
+        return when {
+            media.streamType == StreamType.SMB || media.uri.scheme?.equals("smb", ignoreCase = true) == true -> {
+                try {
+                    val cleanUrl = if (media.uri.userInfo != null) {
+                        val s = media.uri.scheme ?: "smb"
+                        val h = media.uri.host ?: ""
+                        val p = if (media.uri.port > 0) ":${media.uri.port}" else ""
+                        val path = media.uri.path ?: ""
+                        "$s://$h$p$path"
+                    } else media.uri.toString()
+                    val cifs = SmbDataSource.createDefaultCifsContext(media.uri)
+                    val httpUrl = LocalMediaServer.registerSmbStream(cleanUrl, cifs)
+                    addDebugLog("[NETWORK_PROXY] Routing SMB ke LocalMediaServer loopback HTTP: $httpUrl")
+                    media.copy(uri = Uri.parse(httpUrl))
+                } catch (e: Exception) {
+                    addDebugLog("[NETWORK_PROXY_ERROR] Gagal register SMB ke LocalMediaServer: ${e.message}")
+                    media
+                }
+            }
+            media.streamType == StreamType.FTP || media.uri.scheme?.equals("ftp", ignoreCase = true) == true -> {
+                try {
+                    val httpUrl = LocalMediaServer.registerFtpStream(media.uri, media.sizeBytes)
+                    addDebugLog("[NETWORK_PROXY] Routing FTP ke LocalMediaServer loopback HTTP: $httpUrl 🌐")
+                    media.copy(uri = Uri.parse(httpUrl))
+                } catch (e: Exception) {
+                    addDebugLog("[NETWORK_PROXY_ERROR] Gagal register FTP ke LocalMediaServer: ${e.message}. Menggunakan URI ter-encode")
+                    val safeUri = Uri.parse(sanitizeUrlForVlc(media.uri.toString()))
+                    media.copy(uri = safeUri)
+                }
+            }
+            media.streamType == StreamType.URL_STREAM || media.uri.scheme?.equals("http", ignoreCase = true) == true || media.uri.scheme?.equals("https", ignoreCase = true) == true -> {
+                val safeUrl = sanitizeUrlForVlc(media.uri.toString())
+                if (safeUrl != media.uri.toString()) {
+                    addDebugLog("[NETWORK_PROXY] Meng-encode URL streaming untuk LibVLC: $safeUrl")
+                    media.copy(uri = Uri.parse(safeUrl))
+                } else {
+                    media
+                }
+            }
+            else -> media
+        }
+    }
 
     val systemPlayerEngine = SystemPlayerEngine(
         context = context,
@@ -860,6 +935,13 @@ class MediaPlayerManager(private val context: Context) {
                 firstFrameRendered = firstFrame || _playerState.value.firstFrameRendered,
                 errorMessage = error
             )
+            if (error != null && !fallbackAttemptedFromVlc && activeDecoderMode == DecoderMode.VLC) {
+                fallbackAttemptedFromVlc = true
+                addDebugLog("[VLC_FALLBACK] Error LibVLC ($error). Mengalihkan otomatis ke Hardware+ (HW+)... ⚡+")
+                coroutineScope.launch {
+                    switchToDecoder(DecoderMode.HW_PLUS, isUserAction = false)
+                }
+            }
         },
         onCompletion = {
             _playerState.value = _playerState.value.copy(isPlaying = false)
@@ -1325,33 +1407,41 @@ class MediaPlayerManager(private val context: Context) {
                     currentCause = currentCause.cause
                 }
 
-                val isDecoderError = !isNetworkError && (
+                val isDecoderOrPlaybackError = !isNetworkError && (
                         error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
                         error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
                         error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
-                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
+                        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_UNSPECIFIED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_REMOTE_ERROR ||
+                        error.cause is android.media.MediaCodec.CodecException ||
+                        error.cause?.javaClass?.name?.contains("MediaCodec") == true ||
+                        error.cause?.javaClass?.name?.contains("Decoder") == true ||
+                        error.cause?.javaClass?.name?.contains("Renderer") == true
                 )
+                val isDecoderError = isDecoderOrPlaybackError
 
-                // Automatic Decoder Fallback: HW+ -> HW -> SW VLC
-                if (isDecoderError && !fallbackAttempted) {
-                    if (activeDecoderMode == DecoderMode.HW_PLUS) {
-                        fallbackAttempted = true
-                        addDebugLog("[AUTO_FALLBACK] Dekoder HW+ gagal (${error.errorCodeName}). Mengalihkan otomatis ke Hardware standar (HW)... ⚡")
-                        coroutineScope.launch {
-                            switchToDecoder(DecoderMode.HW, isUserAction = false)
-                        }
-                        return
-                    } else if (activeDecoderMode == DecoderMode.HW) {
-                        fallbackAttempted = true
-                        addDebugLog("[AUTO_FALLBACK] Dekoder Hardware gagal (${error.errorCodeName}). Mengalihkan otomatis ke Software VLC C++ Native... 🚀")
-                        coroutineScope.launch {
-                            switchToDecoder(DecoderMode.VLC, isUserAction = false)
-                        }
-                        return
+                // Automatic Fallback to SW VLC:
+                // Saat mode HW atau HW+ gagal (baik video lokal, SMB, FTP, maupun stream), langsung alihkan secara otomatis ke SW VLC (LibVLC Native Engine)
+                val isExplicitHttp404Or403 = httpStatusCode == 404 || httpStatusCode == 403
+                val canFallbackToVlc = (activeDecoderMode == DecoderMode.HW || activeDecoderMode == DecoderMode.HW_PLUS)
+                if (!isExplicitHttp404Or403 && canFallbackToVlc && !fallbackAttemptedToVlc) {
+                    fallbackAttemptedToVlc = true
+                    addDebugLog("[AUTO_FALLBACK] Dekoder ${activeDecoderMode.label} gagal (${error.errorCodeName}: ${error.message}). Mengalihkan otomatis ke Software VLC C++ Native (SW VLC)... 🚀")
+                    _playerState.value = _playerState.value.copy(
+                        errorMessage = null,
+                        isLoading = true
+                    )
+                    coroutineScope.launch {
+                        switchToDecoder(DecoderMode.VLC, isUserAction = false)
                     }
+                    return
                 }
 
                 val errorDetails = buildString {
@@ -1449,7 +1539,8 @@ class MediaPlayerManager(private val context: Context) {
     }
 
     fun playMedia(media: VideoMediaItem, startPositionMs: Long = 0L) {
-        fallbackAttempted = false
+        fallbackAttemptedToVlc = false
+        fallbackAttemptedFromVlc = false
         currentMediaItem = media
         try {
             when (activeDecoderMode) {
@@ -1485,26 +1576,7 @@ class MediaPlayerManager(private val context: Context) {
                         videoCodecName = media.codec,
                         firstFrameRendered = false
                     )
-                    val targetMedia = if (media.streamType == StreamType.SMB || media.uri.scheme?.equals("smb", ignoreCase = true) == true) {
-                        try {
-                            val cleanUrl = if (media.uri.userInfo != null) {
-                                val s = media.uri.scheme ?: "smb"
-                                val h = media.uri.host ?: ""
-                                val p = if (media.uri.port > 0) ":${media.uri.port}" else ""
-                                val path = media.uri.path ?: ""
-                                "$s://$h$p$path"
-                            } else media.uri.toString()
-                            val cifs = SmbDataSource.createDefaultCifsContext(media.uri)
-                            val httpUrl = LocalMediaServer.registerSmbStream(cleanUrl, cifs)
-                            addDebugLog("[NETWORK_PROXY] Routing SMB ke LocalMediaServer loopback HTTP: $httpUrl")
-                            media.copy(uri = Uri.parse(httpUrl))
-                        } catch (e: Exception) {
-                            addDebugLog("[NETWORK_PROXY_ERROR] Gagal register SMB ke LocalMediaServer: ${e.message}")
-                            media
-                        }
-                    } else {
-                        media
-                    }
+                    val targetMedia = prepareMediaForVlc(media)
                     vlcPlayerEngine.playMedia(targetMedia, startPositionMs)
                 }
                 else -> {
@@ -1515,6 +1587,16 @@ class MediaPlayerManager(private val context: Context) {
             }
         } catch (e: Throwable) {
             addDebugLog("[PLAY_ERROR] Error memutar video: ${e.message}")
+            val canFallback = (activeDecoderMode == DecoderMode.HW || activeDecoderMode == DecoderMode.HW_PLUS)
+            if (canFallback && !fallbackAttemptedToVlc) {
+                fallbackAttemptedToVlc = true
+                addDebugLog("[AUTO_FALLBACK] Gagal memutar di ${activeDecoderMode.label}: ${e.message}. Mengalihkan otomatis ke Software VLC C++ Native (SW VLC)... 🚀")
+                _playerState.value = _playerState.value.copy(errorMessage = null, isLoading = true)
+                coroutineScope.launch {
+                    switchToDecoder(DecoderMode.VLC, isUserAction = false)
+                }
+                return
+            }
             _playerState.value = _playerState.value.copy(
                 isLoading = false,
                 errorMessage = "Gagal memutar video: ${e.localizedMessage ?: "Unknown error"}"
@@ -1550,6 +1632,16 @@ class MediaPlayerManager(private val context: Context) {
             )
         } catch (e: Exception) {
             addDebugLog("[LOAD_ERROR] Gagal memuat MediaSource: ${e.message}")
+            val canFallback = (activeDecoderMode == DecoderMode.HW || activeDecoderMode == DecoderMode.HW_PLUS)
+            if (canFallback && !fallbackAttemptedToVlc) {
+                fallbackAttemptedToVlc = true
+                addDebugLog("[AUTO_FALLBACK] Gagal memuat di ${activeDecoderMode.label}: ${e.message}. Mengalihkan otomatis ke Software VLC C++ Native (SW VLC)... 🚀")
+                _playerState.value = _playerState.value.copy(errorMessage = null, isLoading = true)
+                coroutineScope.launch {
+                    switchToDecoder(DecoderMode.VLC, isUserAction = false)
+                }
+                return
+            }
             _playerState.value = _playerState.value.copy(
                 errorMessage = "Gagal memuat video: ${e.localizedMessage ?: "Unknown error"}"
             )
@@ -1753,7 +1845,10 @@ class MediaPlayerManager(private val context: Context) {
 
         addDebugLog("[SWITCH] Mengganti mode dekoder ke ${decoderMode.label} (UserAction: $isUserAction, Posisi: ${currentPos}ms)")
 
-        fallbackAttempted = !isUserAction
+        if (isUserAction) {
+            fallbackAttemptedToVlc = false
+            fallbackAttemptedFromVlc = false
+        }
         activeDecoderMode = decoderMode
         _playerState.value = _playerState.value.copy(
             decoderMode = decoderMode,
@@ -1782,7 +1877,8 @@ class MediaPlayerManager(private val context: Context) {
                     _activePlayer.value = null
                     systemPlayerEngine.release()
                     if (media != null) {
-                        vlcPlayerEngine.playMedia(media, currentPos)
+                        val targetMedia = prepareMediaForVlc(media)
+                        vlcPlayerEngine.playMedia(targetMedia, currentPos)
                     }
                 }
                 else -> {
@@ -1883,10 +1979,11 @@ class MediaPlayerManager(private val context: Context) {
     fun cycleDecoder() {
         val current = _playerState.value.decoderMode
         val next = when (current) {
-            DecoderMode.HW -> DecoderMode.HW_PLUS
-            DecoderMode.HW_PLUS -> DecoderMode.VLC
-            DecoderMode.VLC -> DecoderMode.HW
-            else -> DecoderMode.HW
+            DecoderMode.HW_PLUS -> DecoderMode.HW
+            DecoderMode.HW -> DecoderMode.VLC
+            DecoderMode.VLC -> DecoderMode.SYSTEM
+            DecoderMode.SYSTEM -> DecoderMode.HW_PLUS
+            else -> DecoderMode.HW_PLUS
         }
         switchToDecoder(next, isUserAction = true)
     }

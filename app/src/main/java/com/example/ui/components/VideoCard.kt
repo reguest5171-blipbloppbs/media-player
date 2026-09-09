@@ -49,6 +49,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import com.example.data.model.VideoMediaItem
+import com.example.player.EncryptionUtil
+import java.io.File
 
 @Composable
 fun VideoCard(
@@ -75,6 +77,16 @@ fun VideoCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
+        val thumbModel = remember(video.uri, video.path, video.isEncrypted1ca) {
+            if (video.isEncrypted1ca && video.path.isNotBlank()) {
+                val file = File(video.path)
+                val cached = EncryptionUtil.getOrExtractThumbnailFile(context, file)
+                cached ?: video.uri
+            } else {
+                video.uri
+            }
+        }
+
         Column {
             // Thumbnail container
             if (showThumbnails) {
@@ -84,46 +96,45 @@ fun VideoCard(
                         .aspectRatio(16f / 10f)
                         .background(Color(0xFF151928))
                 ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(thumbModel)
+                            .videoFrameMillis(2000)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = video.displayName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
                     if (video.isEncrypted1ca) {
-                        // Encrypted .1ca Vault visual
+                        // Sleek Vault lock badge in top-left
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(Color(0xFF311B92), Color(0xFF004D40))
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
+                                .padding(6.dp)
+                                .align(Alignment.TopStart)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xDD12121A))
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
-                                    contentDescription = "Encrypted 1ca",
+                                    contentDescription = "Encrypted Vault",
                                     tint = Color(0xFFFFD54F),
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(12.dp)
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = ".1CA ENCRYPTED",
+                                    text = "VAULT",
                                     color = Color(0xFFFFD54F),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
-                    } else {
-                        // Normal media thumbnail
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(video.uri)
-                                .videoFrameMillis(2000)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = video.displayName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
                     }
 
                     // Gradient overlay at bottom of thumbnail

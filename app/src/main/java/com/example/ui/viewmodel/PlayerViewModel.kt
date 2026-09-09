@@ -82,6 +82,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private var hideGestureJob: Job? = null
 
     // System Brightness and Volume caches
+    var savedBrightness: Float = -1f
+        private set
     private var currentBrightness: Float = 0.5f
 
     init {
@@ -295,15 +297,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             val window = activity.window
             val lp = window.attributes
             var current = if (lp.screenBrightness < 0) {
-                try {
-                    Settings.System.getInt(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
-                } catch (e: Exception) { 0.5f }
+                if (savedBrightness > 0f) savedBrightness else {
+                    try {
+                        Settings.System.getInt(activity.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+                    } catch (e: Exception) { 0.5f }
+                }
             } else lp.screenBrightness
 
             current = (current + delta).coerceIn(0.01f, 1.0f)
             lp.screenBrightness = current
             window.attributes = lp
             currentBrightness = current
+            savedBrightness = current
 
             showGestureOverlay(GestureType.BRIGHTNESS, (current * 100).toInt())
         } catch (_: Exception) {}

@@ -47,6 +47,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import com.example.data.model.VideoMediaItem
+import com.example.player.EncryptionUtil
+import java.io.File
 
 @Composable
 fun VideoListItem(
@@ -74,6 +76,16 @@ fun VideoListItem(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
+        val thumbModel = remember(video.uri, video.path, video.isEncrypted1ca) {
+            if (video.isEncrypted1ca && video.path.isNotBlank()) {
+                val file = File(video.path)
+                val cached = EncryptionUtil.getOrExtractThumbnailFile(context, file)
+                cached ?: video.uri
+            } else {
+                video.uri
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -91,35 +103,33 @@ fun VideoListItem(
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF151928))
                 ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(thumbModel)
+                            .videoFrameMillis(2000)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = video.displayName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
                     if (video.isEncrypted1ca) {
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(Color(0xFF311B92), Color(0xFF004D40))
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
+                                .padding(3.dp)
+                                .align(Alignment.TopStart)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xDD12121A))
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
-                                contentDescription = "Encrypted",
+                                contentDescription = "Vault Encrypted",
                                 tint = Color(0xFFFFD54F),
-                                modifier = Modifier.size(if (isCompact) 18.dp else 24.dp)
+                                modifier = Modifier.size(if (isCompact) 10.dp else 12.dp)
                             )
                         }
-                    } else {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(video.uri)
-                                .videoFrameMillis(2000)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = video.displayName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
                     }
 
                     // Duration badge

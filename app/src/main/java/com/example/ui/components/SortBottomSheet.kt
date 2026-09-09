@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +22,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.ViewHeadline
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
@@ -35,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -48,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.LocalDisplayMode
 import com.example.data.model.SortOption
 import com.example.data.model.ViewMode
 
@@ -57,6 +63,7 @@ fun SortBottomSheet(
     currentSort: SortOption,
     isSortAscending: Boolean,
     currentViewMode: ViewMode,
+    currentLocalDisplayMode: LocalDisplayMode = LocalDisplayMode.FOLDERS,
     showThumbnails: Boolean,
     showDuration: Boolean,
     showSize: Boolean,
@@ -65,6 +72,7 @@ fun SortBottomSheet(
     onSortSelected: (SortOption) -> Unit,
     onSortDirectionChanged: (Boolean) -> Unit,
     onViewModeSelected: (ViewMode) -> Unit,
+    onLocalDisplayModeSelected: (LocalDisplayMode) -> Unit = {},
     onToggleThumbnails: (Boolean) -> Unit,
     onToggleDuration: (Boolean) -> Unit,
     onToggleSize: (Boolean) -> Unit,
@@ -99,6 +107,54 @@ fun SortBottomSheet(
             )
 
             Spacer(modifier = Modifier.height(18.dp))
+
+            // SECTION 0: MODE KONTEN LOKAL (Folder, Full Path, Semua Video)
+            Text(
+                text = "Mode Konten Lokal",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Pilih bagaimana video lokal ditampilkan pada tab Lokal",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                DisplayModeItem(
+                    title = "Mode Folder",
+                    subtitle = "Kelompokkan video berdasarkan nama folder (misal: Download, Kamera, Movies)",
+                    icon = Icons.Default.Folder,
+                    isSelected = currentLocalDisplayMode == LocalDisplayMode.FOLDERS,
+                    onClick = { onLocalDisplayModeSelected(LocalDisplayMode.FOLDERS) },
+                    testTag = "mode_folders"
+                )
+                DisplayModeItem(
+                    title = "Folder Full Path",
+                    subtitle = "Tampilkan jalur direktori lengkap (/storage/emulated/0/...)",
+                    icon = Icons.Default.FolderOpen,
+                    isSelected = currentLocalDisplayMode == LocalDisplayMode.FOLDER_FULL_PATH,
+                    onClick = { onLocalDisplayModeSelected(LocalDisplayMode.FOLDER_FULL_PATH) },
+                    testTag = "mode_folder_full_path"
+                )
+                DisplayModeItem(
+                    title = "Semua Video",
+                    subtitle = "Tampilkan seluruh file video dalam satu daftar langsung",
+                    icon = Icons.Default.VideoLibrary,
+                    isSelected = currentLocalDisplayMode == LocalDisplayMode.ALL_VIDEOS,
+                    onClick = { onLocalDisplayModeSelected(LocalDisplayMode.ALL_VIDEOS) },
+                    testTag = "mode_all_videos"
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(14.dp))
 
             // SECTION 1: TAMPILAN / LAYOUT
             Text(
@@ -385,6 +441,73 @@ private fun DisplayCheckboxRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun DisplayModeItem(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = containerColor,
+        border = BorderStroke(if (isSelected) 2.dp else 1.dp, borderColor),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(testTag)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+            }
+
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick
             )
         }
     }

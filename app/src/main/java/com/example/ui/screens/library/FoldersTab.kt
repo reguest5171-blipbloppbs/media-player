@@ -40,6 +40,7 @@ fun FoldersTab(
     selectedFolder: VideoFolder?,
     videosInSelectedFolder: List<VideoMediaItem>,
     viewMode: ViewMode,
+    showFullPath: Boolean = false,
     showThumbnails: Boolean = true,
     showDuration: Boolean = true,
     showSize: Boolean = true,
@@ -152,6 +153,7 @@ fun FoldersTab(
         items(folders, key = { it.path }) { folder ->
             FolderCard(
                 folder = folder,
+                showFullPath = showFullPath,
                 onClick = { onFolderClick(folder) }
             )
         }

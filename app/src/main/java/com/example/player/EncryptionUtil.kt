@@ -1,6 +1,11 @@
 package com.example.player
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaDataSource
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -14,6 +19,65 @@ object EncryptionUtil {
     private const val HEADER_MAGIC = "1CA_MEDIA_VAULT_V1\n"
     private val HEADER_BYTES = HEADER_MAGIC.toByteArray(Charsets.UTF_8)
     private const val XOR_KEY: Byte = 0x5A
+
+    fun getOrExtractThumbnailFile(context: Context, file: File): File? {
+        return try {
+            val cacheDir = File(context.cacheDir, "vault_thumbs").apply { mkdirs() }
+            val thumbFile = File(cacheDir, "${file.name}.jpg")
+            if (thumbFile.exists() && thumbFile.length() > 0) {
+                return thumbFile
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val retriever = MediaMetadataRetriever()
+                val ds = object : MediaDataSource() {
+                    val raf = RandomAccessFile(file, "r")
+                    val isEncrypted = isEncrypted1caFile(file)
+                    val headerSize = HEADER_BYTES.size
+                    val xorSize = 4096
+
+                    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                        val virtualLen = if (isEncrypted) raf.length() - headerSize else raf.length()
+                        if (position >= virtualLen) return -1
+                        val actualOffset = if (isEncrypted) position + headerSize else position
+                        raf.seek(actualOffset)
+                        val toRead = minOf(size.toLong(), virtualLen - position).toInt()
+                        val read = raf.read(buffer, offset, toRead)
+                        if (read <= 0) return -1
+                        if (isEncrypted && position < xorSize) {
+                            for (i in 0 until read) {
+                                val p = position + i
+                                if (p < xorSize) {
+                                    buffer[offset + i] = (buffer[offset + i].toInt() xor XOR_KEY.toInt()).toByte()
+                                }
+                            }
+                        }
+                        return read
+                    }
+
+                    override fun getSize(): Long = if (isEncrypted) raf.length() - headerSize else raf.length()
+                    override fun close() {
+                        try { raf.close() } catch (_: Exception) {}
+                    }
+                }
+                retriever.setDataSource(ds)
+                val bitmap = retriever.getFrameAtTime(2000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.frameAtTime
+                retriever.release()
+                ds.close()
+
+                if (bitmap != null) {
+                    val fos = FileOutputStream(thumbFile)
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos)
+                    fos.flush()
+                    fos.close()
+                    return thumbFile
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     fun isEncrypted1caFile(file: File): Boolean {
         if (!file.exists() || file.length() < HEADER_BYTES.size) return false

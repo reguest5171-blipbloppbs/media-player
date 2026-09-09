@@ -41,9 +41,10 @@ class FtpDataSource : BaseDataSource(/* isNetwork = */ true) {
             pass = Uri.decode(parts[1])
         }
 
-        val fullPath = rawUri.path ?: "/"
+        val fullPath = Uri.decode(rawUri.path ?: "/")
 
         val ftp = FTPClient()
+        ftp.controlEncoding = "UTF-8"
         ftp.connectTimeout = 8000
         ftp.defaultTimeout = 8000
         ftp.setDataTimeout(java.time.Duration.ofMillis(8000))
@@ -54,6 +55,9 @@ class FtpDataSource : BaseDataSource(/* isNetwork = */ true) {
             ftp.disconnect()
             throw IOException("FTP Login gagal untuk user: $user")
         }
+        try {
+            ftp.sendCommand("OPTS UTF8", "ON")
+        } catch (_: Exception) {}
 
         ftp.enterLocalPassiveMode()
         ftp.setFileType(FTP.BINARY_FILE_TYPE)

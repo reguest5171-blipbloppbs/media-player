@@ -9,6 +9,7 @@ import com.example.data.local.UserPreferencesManager
 import com.example.data.local.entity.NetworkServerEntity
 import com.example.data.local.entity.PlayHistoryEntity
 import com.example.data.local.entity.StreamBookmarkEntity
+import com.example.data.model.LocalDisplayMode
 import com.example.data.model.SortOption
 import com.example.data.model.VideoFolder
 import com.example.data.model.VideoMediaItem
@@ -21,7 +22,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -31,6 +34,7 @@ data class MainUiState(
     val sortOption: SortOption = SortOption.DATE_DESC,
     val isSortAscending: Boolean = false,
     val viewMode: ViewMode = ViewMode.GRID,
+    val localDisplayMode: LocalDisplayMode = LocalDisplayMode.FOLDERS,
     val showThumbnails: Boolean = true,
     val showDuration: Boolean = true,
     val showSize: Boolean = true,
@@ -39,7 +43,7 @@ data class MainUiState(
     val isLockModeUnlocked: Boolean = false,
     val hasPinConfigured: Boolean = false,
     val vaultExtension: String = "1ca",
-    val activeTab: Int = 0, // 0: All, 1: Folders, 2: Network, 3: Vault
+    val activeTab: Int = 0, // 0: Lokal, 1: Network, 2: Vault
     val selectedFolder: VideoFolder? = null,
     val ftpBrowsingServer: NetworkServerEntity? = null,
     val ftpCurrentPath: String = "/",
@@ -69,14 +73,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val streamBookmarks: StateFlow<List<StreamBookmarkEntity>> = networkRepository.bookmarksFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Filtered & Sorted Videos
+    private data class VideoFilterParams(
+        val isLockModeUnlocked: Boolean,
+        val showHiddenFiles: Boolean,
+        val selectedFolderPath: String?,
+        val searchQuery: String,
+        val sortOption: SortOption,
+        val isSortAscending: Boolean
+    )
+
+    private val _filterParams = _uiState.map { state ->
+        VideoFilterParams(
+            isLockModeUnlocked = state.isLockModeUnlocked,
+            showHiddenFiles = state.showHiddenFiles,
+            selectedFolderPath = state.selectedFolder?.path,
+            searchQuery = state.searchQuery,
+            sortOption = state.sortOption,
+            isSortAscending = state.isSortAscending
+        )
+    }.distinctUntilChanged()
+
+    // Filtered & Sorted Videos (Recomputes ONLY when filter/sort params change)
     val displayedVideos: StateFlow<List<VideoMediaItem>> = combine(
         _rawVideos,
-        _uiState
-    ) { videos, state ->
+        _filterParams
+    ) { videos, params ->
         var list = videos.filter { video ->
             // In normal mode, hide .1ca files unless Lock Mode is unlocked
-            if (video.isEncrypted1ca && !state.isLockModeUnlocked) {
+            if (video.isEncrypted1ca && !params.isLockModeUnlocked) {
                 false
             } else {
                 true
@@ -84,18 +108,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Hidden files filter
-        if (!state.showHiddenFiles) {
+        if (!params.showHiddenFiles) {
             list = list.filter { !it.displayName.startsWith(".") && !it.folderName.startsWith(".") }
         }
 
         // Folder filter if active
-        if (state.selectedFolder != null) {
-            list = list.filter { it.folderPath == state.selectedFolder.path }
+        if (params.selectedFolderPath != null) {
+            list = list.filter { it.folderPath == params.selectedFolderPath }
         }
 
         // Search filter
-        if (state.searchQuery.isNotBlank()) {
-            val query = state.searchQuery.trim().lowercase()
+        if (params.searchQuery.isNotBlank()) {
+            val query = params.searchQuery.trim().lowercase()
             list = list.filter {
                 it.displayName.lowercase().contains(query) ||
                 it.folderName.lowercase().contains(query) ||
@@ -104,8 +128,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Sorting (respects isSortAscending or explicit direction)
-        val asc = state.isSortAscending
-        when (state.sortOption) {
+        val asc = params.isSortAscending
+        when (params.sortOption) {
             SortOption.NAME -> if (asc) list.sortedBy { it.displayName.lowercase() } else list.sortedByDescending { it.displayName.lowercase() }
             SortOption.DATE -> if (asc) list.sortedBy { it.dateModified } else list.sortedByDescending { it.dateModified }
             SortOption.SIZE -> if (asc) list.sortedBy { it.sizeBytes } else list.sortedByDescending { it.sizeBytes }
@@ -124,16 +148,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val folderList: StateFlow<List<VideoFolder>> = combine(
         _rawVideos,
-        _uiState
-    ) { videos, state ->
+        _uiState.map { it.isLockModeUnlocked }.distinctUntilChanged()
+    ) { videos, isUnlocked ->
         val visibleVideos = videos.filter {
-            !it.isEncrypted1ca || state.isLockModeUnlocked
+            !it.isEncrypted1ca || isUnlocked
         }
         mediaRepository.groupVideosIntoFolders(visibleVideos)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val vaultVideos: StateFlow<List<VideoMediaItem>> = _rawVideos.combine(_uiState) { videos, state ->
-        if (state.isLockModeUnlocked) {
+    val vaultVideos: StateFlow<List<VideoMediaItem>> = combine(
+        _rawVideos,
+        _uiState.map { it.isLockModeUnlocked }.distinctUntilChanged()
+    ) { videos, isUnlocked ->
+        if (isUnlocked) {
             videos.filter { it.isEncrypted1ca }
         } else {
             emptyList()
@@ -156,7 +183,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val savedSize = preferencesManager.showSizeFlow.first()
             val savedResolution = preferencesManager.showResolutionFlow.first()
             val savedHiddenFiles = preferencesManager.showHiddenFilesFlow.first()
-            val savedTab = preferencesManager.lastTabFlow.first()
+            val savedLocalDisplayModeStr = preferencesManager.localDisplayModeFlow.first()
+            val savedLocalDisplayMode = try { LocalDisplayMode.valueOf(savedLocalDisplayModeStr) } catch (_: Exception) { LocalDisplayMode.FOLDERS }
+            val rawTab = preferencesManager.lastTabFlow.first()
+            val savedTab = when (rawTab) {
+                0, 1 -> 0
+                2 -> 1
+                3 -> 2
+                else -> 0
+            }
             val savedFolderPath = preferencesManager.lastFolderPathFlow.first()
 
             _uiState.value = _uiState.value.copy(
@@ -165,6 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sortOption = savedSort,
                 isSortAscending = savedSortAsc,
                 viewMode = savedView,
+                localDisplayMode = savedLocalDisplayMode,
                 showThumbnails = savedThumbnails,
                 showDuration = savedDuration,
                 showSize = savedSize,
@@ -278,6 +314,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(showHiddenFiles = enabled)
         viewModelScope.launch {
             preferencesManager.setShowHiddenFiles(enabled)
+        }
+    }
+
+    fun setLocalDisplayMode(mode: LocalDisplayMode) {
+        _uiState.value = _uiState.value.copy(localDisplayMode = mode)
+        viewModelScope.launch {
+            preferencesManager.setLocalDisplayMode(mode.name)
         }
     }
 

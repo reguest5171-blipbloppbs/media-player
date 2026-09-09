@@ -40,6 +40,12 @@ enum class ViewMode {
     COMPACT
 }
 
+enum class LocalDisplayMode(val label: String, val subtitle: String) {
+    ALL_VIDEOS("Semua Video", "Daftar langsung semua video di penyimpanan"),
+    FOLDERS("Mode Folder", "Kelompokkan video berdasarkan folder"),
+    FOLDER_FULL_PATH("Folder Full Path", "Tampilkan jalur direktori lengkap dari folder")
+}
+
 enum class StreamType {
     LOCAL,
     VAULT_1CA,

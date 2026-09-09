@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.LocalDisplayMode
 import com.example.data.model.VideoMediaItem
 import com.example.data.model.ViewMode
 import com.example.ui.components.AddNetworkServerDialog
@@ -229,18 +230,7 @@ fun LibraryScreen(
                     }
 
                     IconButton(
-                        onClick = { viewModel.setActiveTab(3) },
-                        modifier = Modifier.testTag("vault_lock_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Vault Lock",
-                            tint = if (uiState.isLockModeUnlocked) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { viewModel.setActiveTab(2) },
+                        onClick = { viewModel.setActiveTab(1) },
                         modifier = Modifier.testTag("network_button")
                     ) {
                         Icon(imageVector = Icons.Default.Cloud, contentDescription = "Network")
@@ -265,31 +255,24 @@ fun LibraryScreen(
                 NavigationBarItem(
                     selected = uiState.activeTab == 0,
                     onClick = { viewModel.setActiveTab(0) },
-                    icon = { Icon(imageVector = Icons.Default.VideoLibrary, contentDescription = "All Videos") },
-                    label = { Text("Videos") },
-                    modifier = Modifier.testTag("nav_all_videos")
+                    icon = { Icon(imageVector = Icons.Default.VideoLibrary, contentDescription = "Lokal") },
+                    label = { Text("Lokal") },
+                    modifier = Modifier.testTag("nav_local")
                 )
                 NavigationBarItem(
                     selected = uiState.activeTab == 1,
                     onClick = { viewModel.setActiveTab(1) },
-                    icon = { Icon(imageVector = Icons.Default.Folder, contentDescription = "Folders") },
-                    label = { Text("Folders") },
-                    modifier = Modifier.testTag("nav_folders")
-                )
-                NavigationBarItem(
-                    selected = uiState.activeTab == 2,
-                    onClick = { viewModel.setActiveTab(2) },
                     icon = { Icon(imageVector = Icons.Default.Dns, contentDescription = "Network") },
                     label = { Text("Network") },
                     modifier = Modifier.testTag("nav_network")
                 )
                 NavigationBarItem(
-                    selected = uiState.activeTab == 3,
-                    onClick = { viewModel.setActiveTab(3) },
+                    selected = uiState.activeTab == 2,
+                    onClick = { viewModel.setActiveTab(2) },
                     icon = {
                         Icon(
                             imageVector = Icons.Default.Lock,
-                            contentDescription = "Mode Kunci",
+                            contentDescription = "Vault",
                             tint = if (uiState.isLockModeUnlocked) Color(0xFFFFD54F) else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
@@ -306,63 +289,69 @@ fun LibraryScreen(
         ) {
             when (uiState.activeTab) {
                 0 -> {
-                    AllVideosTab(
-                        videos = displayedVideos,
-                        viewMode = uiState.viewMode,
-                        isScanning = uiState.isScanning,
-                        showThumbnails = uiState.showThumbnails,
-                        showDuration = uiState.showDuration,
-                        showSize = uiState.showSize,
-                        showResolution = uiState.showResolution,
-                        onVideoClick = { video -> onPlayVideo(video, displayedVideos) },
-                        onVideoMenuAction = { video, action ->
-                            activeActionVideo = video
-                            currentDialogAction = action
-                            if (action == VideoMenuAction.PLAY) {
-                                onPlayVideo(video, displayedVideos)
-                            }
-                        },
-                        onScanClick = { viewModel.scanMedia() },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // TAB 0: LOKAL (Mode Folder, Folder Full Path, atau Semua Video)
+                    when (uiState.localDisplayMode) {
+                        LocalDisplayMode.ALL_VIDEOS -> {
+                            AllVideosTab(
+                                videos = displayedVideos,
+                                viewMode = uiState.viewMode,
+                                isScanning = uiState.isScanning,
+                                showThumbnails = uiState.showThumbnails,
+                                showDuration = uiState.showDuration,
+                                showSize = uiState.showSize,
+                                showResolution = uiState.showResolution,
+                                onVideoClick = { video -> onPlayVideo(video, displayedVideos) },
+                                onVideoMenuAction = { video, action ->
+                                    activeActionVideo = video
+                                    currentDialogAction = action
+                                    if (action == VideoMenuAction.PLAY) {
+                                        onPlayVideo(video, displayedVideos)
+                                    }
+                                },
+                                onScanClick = { viewModel.scanMedia() },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        LocalDisplayMode.FOLDERS, LocalDisplayMode.FOLDER_FULL_PATH -> {
+                            val videosInFolder = if (uiState.selectedFolder != null) {
+                                displayedVideos.filter { it.folderPath == uiState.selectedFolder?.path }
+                            } else emptyList()
+
+                            FoldersTab(
+                                folders = folders,
+                                selectedFolder = uiState.selectedFolder,
+                                videosInSelectedFolder = videosInFolder,
+                                viewMode = uiState.viewMode,
+                                showFullPath = uiState.localDisplayMode == LocalDisplayMode.FOLDER_FULL_PATH,
+                                showThumbnails = uiState.showThumbnails,
+                                showDuration = uiState.showDuration,
+                                showSize = uiState.showSize,
+                                showResolution = uiState.showResolution,
+                                isLockUnlocked = uiState.isLockModeUnlocked,
+                                onLockClick = {
+                                    if (uiState.isLockModeUnlocked) {
+                                        viewModel.lockVault()
+                                    } else {
+                                        isPinSetupMode = !uiState.hasPinConfigured
+                                        showPinDialog = true
+                                    }
+                                },
+                                onFolderClick = { folder -> viewModel.selectFolder(folder) },
+                                onBackFromFolder = { viewModel.selectFolder(null) },
+                                onVideoClick = { video -> onPlayVideo(video, videosInFolder) },
+                                onVideoMenuAction = { video, action ->
+                                    activeActionVideo = video
+                                    currentDialogAction = action
+                                    if (action == VideoMenuAction.PLAY) {
+                                        onPlayVideo(video, videosInFolder)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
                 1 -> {
-                    val videosInFolder = if (uiState.selectedFolder != null) {
-                        displayedVideos.filter { it.folderPath == uiState.selectedFolder?.path }
-                    } else emptyList()
-
-                    FoldersTab(
-                        folders = folders,
-                        selectedFolder = uiState.selectedFolder,
-                        videosInSelectedFolder = videosInFolder,
-                        viewMode = uiState.viewMode,
-                        showThumbnails = uiState.showThumbnails,
-                        showDuration = uiState.showDuration,
-                        showSize = uiState.showSize,
-                        showResolution = uiState.showResolution,
-                        isLockUnlocked = uiState.isLockModeUnlocked,
-                        onLockClick = {
-                            if (uiState.isLockModeUnlocked) {
-                                viewModel.lockVault()
-                            } else {
-                                isPinSetupMode = !uiState.hasPinConfigured
-                                showPinDialog = true
-                            }
-                        },
-                        onFolderClick = { folder -> viewModel.selectFolder(folder) },
-                        onBackFromFolder = { viewModel.selectFolder(null) },
-                        onVideoClick = { video -> onPlayVideo(video, videosInFolder) },
-                        onVideoMenuAction = { video, action ->
-                            activeActionVideo = video
-                            currentDialogAction = action
-                            if (action == VideoMenuAction.PLAY) {
-                                onPlayVideo(video, videosInFolder)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-                2 -> {
                     NetworkTab(
                         servers = networkServers,
                         bookmarks = streamBookmarks,
@@ -399,7 +388,7 @@ fun LibraryScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
-                3 -> {
+                2 -> {
                     VaultTab(
                         isUnlocked = uiState.isLockModeUnlocked,
                         hasPinConfigured = uiState.hasPinConfigured,
@@ -435,6 +424,7 @@ fun LibraryScreen(
             currentSort = uiState.sortOption,
             isSortAscending = uiState.isSortAscending,
             currentViewMode = uiState.viewMode,
+            currentLocalDisplayMode = uiState.localDisplayMode,
             showThumbnails = uiState.showThumbnails,
             showDuration = uiState.showDuration,
             showSize = uiState.showSize,
@@ -443,6 +433,7 @@ fun LibraryScreen(
             onSortSelected = { viewModel.setSortOption(it) },
             onSortDirectionChanged = { viewModel.setSortAscending(it) },
             onViewModeSelected = { viewModel.setViewMode(it) },
+            onLocalDisplayModeSelected = { viewModel.setLocalDisplayMode(it) },
             onToggleThumbnails = { viewModel.setShowThumbnails(it) },
             onToggleDuration = { viewModel.setShowDuration(it) },
             onToggleSize = { viewModel.setShowSize(it) },

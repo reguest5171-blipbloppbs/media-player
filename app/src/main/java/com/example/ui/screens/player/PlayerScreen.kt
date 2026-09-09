@@ -30,9 +30,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,8 +47,16 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -178,10 +188,23 @@ fun PlayerScreen(
     }
 
     DisposableEffect(Unit) {
+        try {
+            activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            activity?.window?.let { win ->
+                val saved = viewModel.savedBrightness
+                if (saved > 0f) {
+                    val lp = win.attributes
+                    lp.screenBrightness = saved
+                    win.attributes = lp
+                }
+            }
+        } catch (_: Exception) {}
+
         onDispose {
             try {
                 activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 activity?.window?.let { win ->
+                    win.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     val lp = win.attributes
                     lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                     win.attributes = lp
@@ -408,10 +431,10 @@ fun PlayerScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             listOf(
-                                DecoderMode.HW to "HW ⚡",
-                                DecoderMode.SYSTEM to "Sistem 🏛️",
                                 DecoderMode.HW_PLUS to "HW+ ⚡+",
-                                DecoderMode.SW to "SW ⚙️"
+                                DecoderMode.HW to "HW ⚡",
+                                DecoderMode.VLC to "SW (VLC) 🚀",
+                                DecoderMode.SYSTEM to "Sistem 🏛️"
                             ).forEach { (mode, label) ->
                                 val isCur = playerState.decoderMode == mode
                                 androidx.compose.material3.FilledTonalButton(
@@ -506,9 +529,10 @@ fun PlayerScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             listOf(
+                                DecoderMode.HW_PLUS to "Mode HW+ ⚡+",
                                 DecoderMode.HW to "Mode HW ⚡",
-                                DecoderMode.SYSTEM to "Mode Sistem 🏛️",
-                                DecoderMode.SW to "Mode SW ⚙️"
+                                DecoderMode.VLC to "Mode SW (VLC) 🚀",
+                                DecoderMode.SYSTEM to "Mode Sistem 🏛️"
                             ).forEach { (mode, label) ->
                                 androidx.compose.material3.Button(
                                     onClick = { viewModel.setDecoderMode(mode) },
@@ -1131,18 +1155,35 @@ fun PlayerScreen(
 
     // Audio Track Selection Dialog
     if (showAudioDialog) {
-        Dialog(onDismissRequest = { showAudioDialog = false }) {
+        val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        Dialog(
+            onDismissRequest = { showAudioDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
             Card(
+                modifier = Modifier
+                    .fillMaxWidth(if (isLandscape) 0.75f else 0.92f)
+                    .heightIn(max = if (isLandscape) 340.dp else 520.dp)
+                    .padding(8.dp),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "Pengaturan Trek Audio",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Pengaturan Trek Audio",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(onClick = { showAudioDialog = false }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     androidx.compose.material3.OutlinedButton(
                         onClick = {
@@ -1163,34 +1204,43 @@ fun PlayerScreen(
                         Text(
                             text = "Tidak ada trek audio internal bawaan video.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
                         )
                     } else {
-                        playerState.audioTracks.forEach { track ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable {
-                                        viewModel.selectAudioTrack(track)
-                                        showAudioDialog = false
-                                    }
-                                    .padding(vertical = 12.dp, horizontal = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = track.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (track.isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (track.isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                                if (track.isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .fillMaxWidth()
+                                .testTag("audio_tracks_list"),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(playerState.audioTracks, key = { it.id }) { track ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            viewModel.selectAudioTrack(track)
+                                            showAudioDialog = false
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = track.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (track.isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (track.isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                     )
+                                    if (track.isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1202,160 +1252,461 @@ fun PlayerScreen(
 
     // Subtitle Track Selection Dialog
     if (showSubtitleDialog) {
-        Dialog(onDismissRequest = { showSubtitleDialog = false }) {
+        val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        Dialog(
+            onDismissRequest = { showSubtitleDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
             Card(
+                modifier = Modifier
+                    .fillMaxWidth(if (isLandscape) 0.94f else 0.94f)
+                    .fillMaxHeight(if (isLandscape) 0.94f else 0.85f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(6.dp),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "Pengaturan Subtitle",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    androidx.compose.material3.OutlinedButton(
-                        onClick = {
-                            showSubtitleDialog = false
-                            showExtSubPicker = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("📂 Buka Subtitle Eksternal (SRT/VTT/URL)")
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Posisi Vertikal Subtitle (Geser Atas / Bawah):",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Bawah", fontSize = 11.sp)
-                        Slider(
-                            value = playerState.subtitleOffsetDp.toFloat(),
-                            onValueChange = { viewModel.setSubtitleOffset(it.toInt()) },
-                            valueRange = 0f..150f,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text("Atas", fontSize = 11.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Sinkronisasi Waktu Subtitle (Sync Offset):",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        listOf(-500L to "-0.5s", -100L to "-0.1s").forEach { (d, label) ->
-                            androidx.compose.material3.FilledTonalButton(
-                                onClick = { viewModel.adjustSubtitleDelay(d) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
-                            ) {
-                                Text(label, fontSize = 11.sp)
-                            }
-                        }
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = { viewModel.setSubtitleDelay(0L) },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
-                        ) {
-                            Text("Reset", fontSize = 11.sp)
-                        }
-                        listOf(100L to "+0.1s", 500L to "+0.5s").forEach { (d, label) ->
-                            androidx.compose.material3.FilledTonalButton(
-                                onClick = { viewModel.adjustSubtitleDelay(d) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
-                            ) {
-                                Text(label, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    if (playerState.subtitleDelayMs != 0L) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Offset Aktif: ${if (playerState.subtitleDelayMs > 0) "+" else ""}${playerState.subtitleDelayMs} ms (Video ikut geser)",
-                            fontSize = 11.sp,
-                            color = Color(0xFF80D8FF),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Disable subtitles option
-                    val noneSelected = playerState.subtitleTracks.none { it.isSelected }
+                if (isLandscape) {
+                    // Two-column layout in landscape: Left for settings, Right for scrollable subtitle list
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable {
-                                viewModel.selectSubtitleTrack(null)
-                                showSubtitleDialog = false
-                            }
-                            .padding(vertical = 12.dp, horizontal = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxSize()
+                            .padding(16.dp)
                     ) {
-                        Text(
-                            text = "Matikan Subtitle (Off)",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = if (noneSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
-                        if (noneSelected) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
+                        // Left column: Settings & Offsets
+                        Column(
+                            modifier = Modifier
+                                .weight(1.05f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .padding(end = 12.dp)
+                        ) {
+                            Text(
+                                text = "Pengaturan Subtitle",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = {
+                                    showSubtitleDialog = false
+                                    showExtSubPicker = true
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("📂 Subtitle Eksternal (SRT/VTT)", fontSize = 12.sp)
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Posisi Vertikal (Atas / Bawah):",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Bawah", fontSize = 10.sp)
+                                Slider(
+                                    value = playerState.subtitleOffsetDp.toFloat(),
+                                    onValueChange = { viewModel.setSubtitleOffset(it.toInt()) },
+                                    valueRange = 0f..150f,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text("Atas", fontSize = 10.sp)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Sinkronisasi Waktu Subtitle:",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf(-500L to "-0.5s", -100L to "-0.1s").forEach { (d, label) ->
+                                    androidx.compose.material3.FilledTonalButton(
+                                        onClick = { viewModel.adjustSubtitleDelay(d) },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(label, fontSize = 10.sp)
+                                    }
+                                }
+                                androidx.compose.material3.OutlinedButton(
+                                    onClick = { viewModel.setSubtitleDelay(0L) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Reset", fontSize = 10.sp)
+                                }
+                                listOf(100L to "+0.1s", 500L to "+0.5s").forEach { (d, label) ->
+                                    androidx.compose.material3.FilledTonalButton(
+                                        onClick = { viewModel.adjustSubtitleDelay(d) },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 1.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(label, fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                            if (playerState.subtitleDelayMs != 0L) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Offset: ${if (playerState.subtitleDelayMs > 0) "+" else ""}${playerState.subtitleDelayMs} ms",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF80D8FF),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        // Vertical separator
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .fillMaxHeight()
+                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        )
+
+                        // Right column: Scrollable list of subtitle tracks
+                        Column(
+                            modifier = Modifier
+                                .weight(1.3f)
+                                .fillMaxHeight()
+                                .padding(start = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Daftar Subtitle (${playerState.subtitleTracks.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                IconButton(onClick = { showSubtitleDialog = false }) {
+                                    Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup")
+                                }
+                            }
+
+                            val noneSelected = playerState.subtitleTracks.none { it.isSelected }
+                            LazyColumn(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .testTag("subtitle_tracks_list"),
+                                contentPadding = PaddingValues(vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                item(key = "sub_landscape_off") {
+                                    Surface(
+                                        onClick = {
+                                            viewModel.selectSubtitleTrack(null)
+                                            showSubtitleDialog = false
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (noneSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 10.dp, horizontal = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Matikan Subtitle (Off)",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (noneSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (noneSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                itemsIndexed(
+                                    items = playerState.subtitleTracks,
+                                    key = { index, track -> "${track.id}_${track.trackIndex}_$index" }
+                                ) { index, track ->
+                                    val isTrackSelected = track.isSelected
+                                    Surface(
+                                        onClick = {
+                                            viewModel.selectSubtitleTrack(track)
+                                            showSubtitleDialog = false
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isTrackSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 10.dp, horizontal = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Subtitles,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = if (isTrackSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = track.label,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isTrackSelected) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isTrackSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                            if (isTrackSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-
-                    playerState.subtitleTracks.forEach { track ->
+                } else {
+                    // Vertical (Portrait) layout: Header -> Controls -> Scrollable subtitle list
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(20.dp)
+                    ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    viewModel.selectSubtitleTrack(track)
-                                    showSubtitleDialog = false
-                                }
-                                .padding(vertical = 12.dp, horizontal = 8.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = track.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (track.isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (track.isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                text = "Pengaturan Subtitle",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
                             )
-                            if (track.isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                            IconButton(onClick = { showSubtitleDialog = false }) {
+                                Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup")
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = {
+                                showSubtitleDialog = false
+                                showExtSubPicker = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("📂 Buka Subtitle Eksternal (SRT/VTT/URL)")
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Posisi Vertikal Subtitle (Geser Atas / Bawah):",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Bawah", fontSize = 11.sp)
+                            Slider(
+                                value = playerState.subtitleOffsetDp.toFloat(),
+                                onValueChange = { viewModel.setSubtitleOffset(it.toInt()) },
+                                valueRange = 0f..150f,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text("Atas", fontSize = 11.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Sinkronisasi Waktu Subtitle (Sync Offset):",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(-500L to "-0.5s", -100L to "-0.1s").forEach { (d, label) ->
+                                androidx.compose.material3.FilledTonalButton(
+                                    onClick = { viewModel.adjustSubtitleDelay(d) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                                ) {
+                                    Text(label, fontSize = 11.sp)
+                                }
+                            }
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { viewModel.setSubtitleDelay(0L) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                            ) {
+                                Text("Reset", fontSize = 11.sp)
+                            }
+                            listOf(100L to "+0.1s", 500L to "+0.5s").forEach { (d, label) ->
+                                androidx.compose.material3.FilledTonalButton(
+                                    onClick = { viewModel.adjustSubtitleDelay(d) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 1.dp, vertical = 4.dp)
+                                ) {
+                                    Text(label, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        if (playerState.subtitleDelayMs != 0L) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Offset Aktif: ${if (playerState.subtitleDelayMs > 0) "+" else ""}${playerState.subtitleDelayMs} ms (Video ikut geser)",
+                                fontSize = 11.sp,
+                                color = Color(0xFF80D8FF),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Daftar Trek Subtitle (${playerState.subtitleTracks.size}):",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        val noneSelected = playerState.subtitleTracks.none { it.isSelected }
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .testTag("subtitle_tracks_list"),
+                            contentPadding = PaddingValues(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            item(key = "sub_portrait_off") {
+                                Surface(
+                                    onClick = {
+                                        viewModel.selectSubtitleTrack(null)
+                                        showSubtitleDialog = false
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (noneSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp, horizontal = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Matikan Subtitle (Off)",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (noneSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (noneSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (noneSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            itemsIndexed(
+                                items = playerState.subtitleTracks,
+                                key = { index, track -> "${track.id}_${track.trackIndex}_$index" }
+                            ) { index, track ->
+                                val isTrackSelected = track.isSelected
+                                Surface(
+                                    onClick = {
+                                        viewModel.selectSubtitleTrack(track)
+                                        showSubtitleDialog = false
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isTrackSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp, horizontal = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Subtitles,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp),
+                                                tint = if (isTrackSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = track.label,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = if (isTrackSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isTrackSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        if (isTrackSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1779,6 +2130,7 @@ fun PlayerSurface(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     val surfaceView = android.view.SurfaceView(ctx).apply {
+                        keepScreenOn = true
                         layoutParams = android.widget.FrameLayout.LayoutParams(
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1828,6 +2180,7 @@ fun PlayerSurface(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     val surfaceView = android.view.SurfaceView(ctx).apply {
+                        keepScreenOn = true
                         layoutParams = android.widget.FrameLayout.LayoutParams(
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
