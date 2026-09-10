@@ -181,10 +181,10 @@ fun LockToVaultDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(imageVector = Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-        title = { Text("Lock to .1ca Private Vault?") },
+        title = { Text("Kunci ke Brankas Rahasia?") },
         text = {
             Text(
-                text = "This will encrypt \"${video.displayName}\" with .1ca format obfuscation. It will be hidden from other media players and gallery apps, and will only be accessible in this player's Mode Kunci with your PIN.",
+                text = "Video \"${video.displayName}\" akan dienkripsi dan disembunyikan dari galeri luar, hanya dapat diakses melalui Mode Kunci dengan PIN Anda.",
                 style = MaterialTheme.typography.bodyMedium
             )
         },
@@ -193,12 +193,12 @@ fun LockToVaultDialog(
                 onClick = onConfirm,
                 modifier = Modifier.testTag("confirm_lock_button")
             ) {
-                Text("Lock & Encrypt")
+                Text("Kunci & Enkripsi")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("Batal")
             }
         }
     )

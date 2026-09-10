@@ -94,12 +94,7 @@ fun PinDialog(
 
     var step by remember { mutableIntStateOf(0) }
     var showSecurityQuestionStep by remember { mutableStateOf(false) }
-    var showExtensionStep by remember { mutableStateOf(false) }
     var isForgotPinMode by remember { mutableStateOf(false) }
-
-    var customExtInput by remember {
-        mutableStateOf(if (isSettingNewPin || mode == PinDialogMode.SETUP_NEW) "" else initialVaultExtension)
-    }
 
     var oldPinInput by remember { mutableStateOf("") }
     var newPinInput by remember { mutableStateOf("") }
@@ -324,7 +319,7 @@ fun PinDialog(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!showSecurityQuestionStep && !showExtensionStep && !isForgotPinMode) {
+                        if (!showSecurityQuestionStep && !isForgotPinMode) {
                             IconButton(onClick = { showDigits = !showDigits }) {
                                 Icon(
                                     imageVector = if (showDigits) Icons.Default.VisibilityOff else Icons.Default.Visibility,
@@ -350,9 +345,8 @@ fun PinDialog(
                 val title = when {
                     isForgotPinMode -> "Pemulihan Lupa PIN"
                     showSecurityQuestionStep -> "Pertanyaan Keamanan"
-                    showExtensionStep -> "Tentukan Ekstensi Kustom (Opsional)"
                     else -> when (mode) {
-                        PinDialogMode.UNLOCK -> "Mode Kunci (.1ca Vault)"
+                        PinDialogMode.UNLOCK -> "Mode Kunci (Private Vault)"
                         PinDialogMode.SETUP_NEW -> if (step == 0) "Buat 4-Digit PIN Keamanan" else "Konfirmasi PIN Baru"
                         PinDialogMode.CHANGE_PIN -> when (step) {
                             0 -> "Masukkan PIN Saat Ini"
@@ -365,10 +359,9 @@ fun PinDialog(
                 val subtitle = when {
                     isForgotPinMode -> savedSecurityQuestion ?: "Masukkan jawaban pertanyaan keamanan Anda"
                     showSecurityQuestionStep -> "Pertanyaan ini digunakan untuk memulihkan PIN jika Anda lupa"
-                    showExtensionStep -> "Bisa dikosongkan jika tidak ingin mengubah ekstensi video kustom"
                     else -> when (mode) {
-                        PinDialogMode.UNLOCK -> "Masukkan 4-digit PIN untuk membuka video terenkripsi"
-                        PinDialogMode.SETUP_NEW -> if (step == 0) "PIN akan disimpan permanen & melindungi video terenkripsi" else "Ketik ulang PIN yang sama untuk verifikasi"
+                        PinDialogMode.UNLOCK -> "Masukkan 4-digit PIN untuk membuka brankas"
+                        PinDialogMode.SETUP_NEW -> if (step == 0) "PIN akan disimpan permanen & melindungi video brankas" else "Ketik ulang PIN yang sama untuk verifikasi"
                         PinDialogMode.CHANGE_PIN -> when (step) {
                             0 -> "Verifikasi PIN lama Anda terlebih dahulu"
                             1 -> "Tentukan 4-digit PIN keamanan baru"
@@ -557,75 +550,11 @@ fun PinDialog(
                                         return@Button
                                     }
 
-                                    showSecurityQuestionStep = false
-                                    showExtensionStep = true
-                                }
-                            ) {
-                                Text("Lanjut Ke Ekstensi")
-                            }
-                        }
-                    }
-                } else if (showExtensionStep) {
-                    // Extension input view
-                    OutlinedTextField(
-                        value = customExtInput,
-                        onValueChange = {
-                            customExtInput = it
-                            errorMessage = null
-                        },
-                        label = { Text("Ekstensi Video (Opsional)") },
-                        placeholder = { Text("Kosongkan untuk bawaan") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp)
-                            .testTag("custom_extension_input"),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    if (errorMessage != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = errorMessage ?: "",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelMedium,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = onDismiss) {
-                            Text("Batal")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                isSuccess = true
-                                coroutineScope.launch {
-                                    delay(200)
-                                    val cleanExt = customExtInput.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
-                                    val existingExts = initialVaultExtension.split(",")
-                                        .map { it.trim().removePrefix(".").lowercase() }
-                                        .filter { it.isNotBlank() }
-
-                                    val finalQuestion = if (selectedPresetQuestion == presetQuestions.last()) customQuestionText.trim() else selectedPresetQuestion
-                                    val finalAnswer = securityAnswerInput.trim()
-
-                                    if (existingExts.contains(cleanExt)) {
-                                        // Extension already pinned -> Do not duplicate, just unlock/save
-                                        if (onPinExtensionAndQuestionSuccess != null) {
-                                            onPinExtensionAndQuestionSuccess(newPinInput, initialVaultExtension, finalQuestion, finalAnswer)
-                                        } else if (onPinAndExtensionSuccess != null) {
-                                            onPinAndExtensionSuccess(newPinInput, initialVaultExtension)
-                                        } else {
-                                            onPinSuccess(newPinInput)
-                                        }
-                                    } else {
+                                    isSuccess = true
+                                    coroutineScope.launch {
+                                        delay(250)
+                                        val cleanExt = initialVaultExtension.trim().removePrefix(".").lowercase().ifBlank { "1ca" }
+                                        val finalAnswer = securityAnswerInput.trim()
                                         if (onPinExtensionAndQuestionSuccess != null) {
                                             onPinExtensionAndQuestionSuccess(newPinInput, cleanExt, finalQuestion, finalAnswer)
                                         } else if (onPinAndExtensionSuccess != null) {
@@ -635,10 +564,9 @@ fun PinDialog(
                                         }
                                     }
                                 }
-                            },
-                            modifier = Modifier.testTag("save_pin_extension_button")
-                        ) {
-                            Text("Simpan & Buka Kunci")
+                            ) {
+                                Text("Simpan & Buka Kunci")
+                            }
                         }
                     }
                 } else {

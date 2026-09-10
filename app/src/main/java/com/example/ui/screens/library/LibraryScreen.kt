@@ -1,6 +1,8 @@
 package com.example.ui.screens.library
 
 import android.Manifest
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -66,6 +68,7 @@ import com.example.data.model.LocalDisplayMode
 import com.example.data.model.VideoMediaItem
 import com.example.data.model.ViewMode
 import com.example.ui.components.AddNetworkServerDialog
+import com.example.ui.components.AddNetworkShortcutDialog
 import com.example.ui.components.AddStreamUrlDialog
 import com.example.ui.components.DeleteFileDialog
 import com.example.ui.components.LockToVaultDialog
@@ -96,6 +99,10 @@ fun LibraryScreen(
     val vaultVideos by viewModel.vaultVideos.collectAsStateWithLifecycle()
     val networkServers by viewModel.networkServers.collectAsStateWithLifecycle()
     val streamBookmarks by viewModel.streamBookmarks.collectAsStateWithLifecycle()
+    val networkShortcuts by viewModel.networkShortcuts.collectAsStateWithLifecycle()
+    val folderPlaybackHistory by viewModel.folderPlaybackHistory.collectAsStateWithLifecycle()
+    val folderTreeData by viewModel.folderTreeData.collectAsStateWithLifecycle()
+    val folderTreeBreadcrumbs by viewModel.folderTreeBreadcrumbs.collectAsStateWithLifecycle()
 
     // Dialog States
     var showSortSheet by remember { mutableStateOf(false) }
@@ -103,6 +110,7 @@ fun LibraryScreen(
     var isPinSetupMode by remember { mutableStateOf(false) }
     var showAddServerDialog by remember { mutableStateOf(false) }
     var showAddStreamDialog by remember { mutableStateOf(false) }
+    var showAddShortcutDialog by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
 
     // Target Video Actions
@@ -132,6 +140,10 @@ fun LibraryScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
     LaunchedEffect(uiState.messageSnackbar) {
         uiState.messageSnackbar?.let { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -142,6 +154,7 @@ fun LibraryScreen(
     // Intercept Back button so navigating back from folders, FTP/SMB browser, search or tabs does NOT close the app
     BackHandler(
         enabled = uiState.selectedFolder != null ||
+                uiState.folderTreeCurrentPath != null ||
                 uiState.ftpBrowsingServer != null ||
                 searchActive ||
                 uiState.activeTab != 0
@@ -159,6 +172,8 @@ fun LibraryScreen(
             }
         } else if (uiState.selectedFolder != null) {
             viewModel.clearSelectedFolder()
+        } else if (uiState.folderTreeCurrentPath != null) {
+            viewModel.navigateFolderTreeUp()
         } else if (uiState.activeTab != 0) {
             viewModel.setActiveTab(0)
         }
@@ -322,7 +337,13 @@ fun LibraryScreen(
                                 selectedFolder = uiState.selectedFolder,
                                 videosInSelectedFolder = videosInFolder,
                                 viewMode = uiState.viewMode,
-                                showFullPath = uiState.localDisplayMode == LocalDisplayMode.FOLDER_FULL_PATH,
+                                localDisplayMode = uiState.localDisplayMode,
+                                folderTreeCurrentPath = uiState.folderTreeCurrentPath,
+                                folderTreeNodes = folderTreeData.first,
+                                folderTreeDirectVideos = folderTreeData.second,
+                                breadcrumbs = folderTreeBreadcrumbs,
+                                folderPlaybackHistory = folderPlaybackHistory,
+                                folderFilterMode = uiState.folderFilterMode,
                                 showThumbnails = uiState.showThumbnails,
                                 showDuration = uiState.showDuration,
                                 showSize = uiState.showSize,
@@ -337,13 +358,17 @@ fun LibraryScreen(
                                     }
                                 },
                                 onFolderClick = { folder -> viewModel.selectFolder(folder) },
+                                onFolderNodeClick = { node -> viewModel.navigateFolderTree(node.path) },
+                                onBreadcrumbClick = { path -> viewModel.navigateFolderTree(path) },
                                 onBackFromFolder = { viewModel.selectFolder(null) },
-                                onVideoClick = { video -> onPlayVideo(video, videosInFolder) },
+                                onFolderTreeBack = { viewModel.navigateFolderTreeUp() },
+                                onFolderFilterModeChange = { mode -> viewModel.setFolderFilterMode(mode) },
+                                onVideoClick = { video -> onPlayVideo(video, videosInFolder.ifEmpty { folderTreeData.second }) },
                                 onVideoMenuAction = { video, action ->
                                     activeActionVideo = video
                                     currentDialogAction = action
                                     if (action == VideoMenuAction.PLAY) {
-                                        onPlayVideo(video, videosInFolder)
+                                        onPlayVideo(video, videosInFolder.ifEmpty { folderTreeData.second })
                                     }
                                 },
                                 modifier = Modifier.fillMaxSize()
@@ -355,11 +380,15 @@ fun LibraryScreen(
                     NetworkTab(
                         servers = networkServers,
                         bookmarks = streamBookmarks,
+                        shortcuts = networkShortcuts,
                         browsingServer = uiState.ftpBrowsingServer,
                         currentFtpPath = uiState.ftpCurrentPath,
                         ftpFiles = uiState.ftpFiles,
                         isFtpLoading = uiState.ftpLoading,
                         ftpErrorMessage = uiState.ftpErrorMessage,
+                        isDownloading = uiState.isDownloadingRemoteFile,
+                        downloadProgress = uiState.downloadProgress,
+                        downloadingFileName = uiState.downloadingFileName,
                         isLockUnlocked = uiState.isLockModeUnlocked,
                         onLockClick = {
                             if (uiState.isLockModeUnlocked) {
@@ -370,6 +399,25 @@ fun LibraryScreen(
                             }
                         },
                         onOpenServer = { server -> viewModel.openFtpServer(server) },
+                        onOpenShortcut = { shortcut ->
+                            val server = networkServers.find { it.id == shortcut.serverId } ?: networkServers.firstOrNull()
+                            if (server != null) {
+                                if (shortcut.isDirectory) {
+                                    viewModel.openFtpServer(server)
+                                    viewModel.navigateFtp(shortcut.targetPath)
+                                } else {
+                                    val fileItem = com.example.data.repository.NetworkFileItem(
+                                        name = shortcut.title,
+                                        path = shortcut.targetPath,
+                                        isDirectory = false,
+                                        sizeBytes = 0L,
+                                        lastModified = 0L
+                                    )
+                                    val streamItem = viewModel.networkRepository.buildNetworkVideoItem(fileItem, server.name, server.type)
+                                    onPlayVideo(streamItem, listOf(streamItem))
+                                }
+                            }
+                        },
                         onNavigateFtp = { path -> viewModel.navigateFtp(path) },
                         onCloseFtp = { viewModel.closeFtpBrowser() },
                         onPlayFtpFile = { server, file ->
@@ -382,9 +430,27 @@ fun LibraryScreen(
                         },
                         onAddServerClick = { showAddServerDialog = true },
                         onAddBookmarkClick = { showAddStreamDialog = true },
+                        onAddShortcutClick = { showAddShortcutDialog = true },
                         onLoadPresetSamples = { viewModel.loadPresetSampleStreams() },
                         onDeleteServer = { id -> viewModel.deleteNetworkServer(id) },
                         onDeleteBookmark = { id -> viewModel.deleteStreamBookmark(id) },
+                        onDeleteShortcut = { id -> viewModel.deleteNetworkShortcut(id) },
+                        onDeleteRemoteFile = { server, file -> viewModel.deleteRemoteFile(server, file) },
+                        onRenameRemoteFile = { server, file, newName -> viewModel.renameRemoteFile(server, file, newName) },
+                        onMoveRemoteFile = { server, file, targetDir -> viewModel.moveRemoteFile(server, file, targetDir) },
+                        onCopyRemoteFile = { server, file, targetDir -> viewModel.copyRemoteFile(server, file, targetDir) },
+                        onDownloadRemoteFile = { server, file -> viewModel.downloadRemoteFileToLocal(server, file) },
+                        onLockRemoteFileToVault = { server, file -> viewModel.lockRemoteFileToVault(server, file) },
+                        onPinRemoteShortcut = { server, file ->
+                            viewModel.addNetworkShortcut(
+                                title = file.name,
+                                serverId = server.id,
+                                serverName = server.name,
+                                serverType = server.type,
+                                targetPath = file.path,
+                                isDirectory = file.isDirectory
+                            )
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -394,6 +460,10 @@ fun LibraryScreen(
                         hasPinConfigured = uiState.hasPinConfigured,
                         vaultVideos = vaultVideos,
                         viewMode = uiState.viewMode,
+                        showThumbnails = uiState.showThumbnails,
+                        showDuration = uiState.showDuration,
+                        showSize = uiState.showSize,
+                        showResolution = uiState.showResolution,
                         onUnlockClick = {
                             isPinSetupMode = false
                             showPinDialog = true
@@ -484,6 +554,16 @@ fun LibraryScreen(
                 viewModel.addNetworkServer(name, type, host, port, user, pass, path)
             },
             onDismiss = { showAddServerDialog = false }
+        )
+    }
+
+    if (showAddShortcutDialog) {
+        AddNetworkShortcutDialog(
+            servers = networkServers,
+            onDismiss = { showAddShortcutDialog = false },
+            onAddShortcut = { title, serverId, serverName, serverType, targetPath, isDirectory ->
+                viewModel.addNetworkShortcut(title, serverId, serverName, serverType, targetPath, isDirectory)
+            }
         )
     }
 

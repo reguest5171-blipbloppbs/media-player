@@ -102,7 +102,12 @@ data class PlayerState(
     val subtitleDelayMs: Long = 0L,
     val subtitleCuesText: String = "",
     val externalSubtitleName: String? = null,
-    val externalAudioName: String? = null
+    val externalAudioName: String? = null,
+    val isEnded: Boolean = false,
+    val videoEnhancerMode: com.example.data.model.VideoEnhancerMode = com.example.data.model.VideoEnhancerMode.OFF,
+    val videoContrast: Float = 1.0f,
+    val videoBrightness: Float = 0.0f,
+    val videoSaturation: Float = 1.0f
 )
 
 @OptIn(UnstableApi::class)
@@ -1337,10 +1342,12 @@ class MediaPlayerManager(private val context: Context) {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val isLoading = playbackState == Player.STATE_BUFFERING
+                val isEnded = playbackState == Player.STATE_ENDED
                 val duration = if (player.duration > 0) player.duration else 0L
                 _playerState.value = _playerState.value.copy(
                     isLoading = isLoading,
-                    durationMs = duration
+                    durationMs = duration,
+                    isEnded = isEnded
                 )
 
                 if (playbackState == Player.STATE_BUFFERING) {
@@ -1963,6 +1970,55 @@ class MediaPlayerManager(private val context: Context) {
 
     fun setAspectRatioMode(mode: AspectRatioMode) {
         _playerState.value = _playerState.value.copy(aspectRatioMode = mode)
+    }
+
+    fun setVideoEnhancerMode(mode: com.example.data.model.VideoEnhancerMode) {
+        when (mode) {
+            com.example.data.model.VideoEnhancerMode.OFF -> {
+                _playerState.value = _playerState.value.copy(
+                    videoEnhancerMode = mode,
+                    videoContrast = 1.0f,
+                    videoBrightness = 0.0f,
+                    videoSaturation = 1.0f
+                )
+            }
+            com.example.data.model.VideoEnhancerMode.HDR_ADAPTIVE -> {
+                _playerState.value = _playerState.value.copy(
+                    videoEnhancerMode = mode,
+                    videoContrast = 1.18f,
+                    videoBrightness = 0.08f,
+                    videoSaturation = 1.15f
+                )
+            }
+            com.example.data.model.VideoEnhancerMode.SHADOW_LIFT -> {
+                _playerState.value = _playerState.value.copy(
+                    videoEnhancerMode = mode,
+                    videoContrast = 1.10f,
+                    videoBrightness = 0.18f,
+                    videoSaturation = 1.05f
+                )
+            }
+            com.example.data.model.VideoEnhancerMode.VIVID_POP -> {
+                _playerState.value = _playerState.value.copy(
+                    videoEnhancerMode = mode,
+                    videoContrast = 1.22f,
+                    videoBrightness = 0.04f,
+                    videoSaturation = 1.30f
+                )
+            }
+            com.example.data.model.VideoEnhancerMode.CUSTOM -> {
+                _playerState.value = _playerState.value.copy(videoEnhancerMode = mode)
+            }
+        }
+    }
+
+    fun setVideoColorAdjustments(contrast: Float, brightness: Float, saturation: Float) {
+        _playerState.value = _playerState.value.copy(
+            videoEnhancerMode = com.example.data.model.VideoEnhancerMode.CUSTOM,
+            videoContrast = contrast.coerceIn(0.5f, 2.0f),
+            videoBrightness = brightness.coerceIn(-0.5f, 0.5f),
+            videoSaturation = saturation.coerceIn(0.0f, 2.0f)
+        )
     }
 
     fun cycleAspectRatio() {

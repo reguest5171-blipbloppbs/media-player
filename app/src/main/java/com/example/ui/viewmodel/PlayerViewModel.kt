@@ -77,6 +77,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _doubleTapRipple = MutableStateFlow<DoubleTapRipple?>(null)
     val doubleTapRipple: StateFlow<DoubleTapRipple?> = _doubleTapRipple.asStateFlow()
 
+    private val _resumeNoticePosition = MutableStateFlow<Long?>(null)
+    val resumeNoticePosition: StateFlow<Long?> = _resumeNoticePosition.asStateFlow()
+
     private var progressTrackerJob: Job? = null
     private var hideControlsJob: Job? = null
     private var hideGestureJob: Job? = null
@@ -88,6 +91,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         startProgressTracker()
+        viewModelScope.launch {
+            var lastEndedMediaId: Long? = null
+            playerState.collect { state ->
+                if (state.isEnded) {
+                    val currentId = _currentMedia.value?.id
+                    if (currentId != null && currentId != lastEndedMediaId) {
+                        lastEndedMediaId = currentId
+                        playNext()
+                    }
+                }
+            }
+        }
     }
 
     private fun startProgressTracker() {
@@ -121,7 +136,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 val history = if (resume) {
                     try { repository.getPlayHistoryForUri(media.uri.toString()) } catch (_: Throwable) { null }
                 } else null
-                val startPos = history?.lastPositionMs ?: 0L
+                
+                var startPos = history?.lastPositionMs ?: 0L
+                // Video under 5 minutes (300,000 ms) always starts from the beginning
+                if (media.durationMs in 1..299_999L) {
+                    startPos = 0L
+                    _resumeNoticePosition.value = null
+                } else if (startPos > 3000L) {
+                    _resumeNoticePosition.value = startPos
+                } else {
+                    _resumeNoticePosition.value = null
+                }
 
                 playerManager.initializePlayer(decoder)
                 playerManager.playMedia(media, startPos)
@@ -132,17 +157,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun restartFromBeginning() {
+        _resumeNoticePosition.value = null
+        seekTo(0L)
+    }
+
+    fun dismissResumeNotice() {
+        _resumeNoticePosition.value = null
+    }
+
     fun togglePlayPause() {
         playerManager.togglePlayPause()
         showControlsWithTimeout()
     }
 
     fun seekTo(positionMs: Long) {
+        _resumeNoticePosition.value = null
         playerManager.seekTo(positionMs)
         showControlsWithTimeout()
     }
 
     fun skipForward(seconds: Int = 10) {
+        _resumeNoticePosition.value = null
         playerManager.skipForward(seconds)
         _doubleTapRipple.value = DoubleTapRipple(isForward = true)
         viewModelScope.launch {
@@ -152,6 +188,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun skipBackward(seconds: Int = 10) {
+        _resumeNoticePosition.value = null
         playerManager.skipBackward(seconds)
         _doubleTapRipple.value = DoubleTapRipple(isForward = false)
         viewModelScope.launch {
@@ -435,6 +472,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             delay(1200)
             _gestureState.value = _gestureState.value.copy(isVisible = false)
         }
+    }
+
+    fun setVideoEnhancerMode(mode: com.example.data.model.VideoEnhancerMode) {
+        playerManager.setVideoEnhancerMode(mode)
+    }
+
+    fun setVideoColorAdjustments(contrast: Float, brightness: Float, saturation: Float) {
+        playerManager.setVideoColorAdjustments(contrast, brightness, saturation)
     }
 
     fun hideGestureOverlay() {

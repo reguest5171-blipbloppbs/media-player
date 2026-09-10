@@ -8,6 +8,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.example.data.local.dao.MediaPlayerDao
 import com.example.data.local.entity.PlayHistoryEntity
+import com.example.data.model.FolderBreadcrumb
+import com.example.data.model.FolderHistoryItem
+import com.example.data.model.FolderTreeNode
 import com.example.data.model.StreamType
 import com.example.data.model.VideoFolder
 import com.example.data.model.VideoMediaItem
@@ -221,20 +224,236 @@ class MediaRepository(
         }
     }
 
-    fun groupVideosIntoFolders(videos: List<VideoMediaItem>): List<VideoFolder> {
+    fun groupVideosIntoFolders(
+        videos: List<VideoMediaItem>,
+        playHistory: List<PlayHistoryEntity> = emptyList()
+    ): List<VideoFolder> {
         val groups = videos.groupBy { it.folderPath }
+        val historyMap = playHistory.associateBy { it.mediaUri }
+        val historyPathMap = playHistory.associateBy { it.mediaPath }
+        val now = System.currentTimeMillis()
+        val sevenDaysMs = 7L * 24 * 3600 * 1000L
+
         return groups.map { (folderPath, items) ->
             val totalSize = items.sumOf { it.sizeBytes }
             val folderName = items.firstOrNull()?.folderName ?: "Folder"
             val latestThumb = items.maxByOrNull { it.dateModified }?.uri
+
+            // Check if any video in this folder has playback history
+            val playedItem = items.mapNotNull { item ->
+                historyMap[item.uri.toString()] ?: historyPathMap[item.path]
+            }.maxByOrNull { it.lastPlayedTimestamp }
+
+            val newCount = items.count { it.isNewVideo }
+            val oldestDate = items.minOfOrNull { it.dateModified } ?: 0L
+            val isNewFolder = newCount > 0 && (items.all { it.isNewVideo } || (now - oldestDate) < sevenDaysMs)
+
             VideoFolder(
                 path = folderPath,
                 name = folderName,
                 videoCount = items.size,
                 totalSizeBytes = totalSize,
-                latestThumbnailUri = latestThumb
+                latestThumbnailUri = latestThumb,
+                subFolderCount = 0,
+                lastPlayedVideoTitle = playedItem?.title,
+                lastPlayedTimestamp = playedItem?.lastPlayedTimestamp,
+                hasPlayHistory = playedItem != null,
+                newVideoCount = newCount,
+                isNewFolder = isNewFolder
             )
-        }.sortedByDescending { it.videoCount }
+        }.sortedWith(compareByDescending<VideoFolder> { it.hasPlayHistory }.thenByDescending { it.videoCount })
+    }
+
+    fun getFolderPlaybackHistory(
+        videos: List<VideoMediaItem>,
+        playHistory: List<PlayHistoryEntity>
+    ): List<FolderHistoryItem> {
+        if (playHistory.isEmpty()) return emptyList()
+
+        val historyMap = playHistory.associateBy { it.mediaUri }
+        val historyPathMap = playHistory.associateBy { it.mediaPath }
+
+        val groups = videos.groupBy { it.folderPath }
+        val result = mutableListOf<FolderHistoryItem>()
+
+        for ((folderPath, items) in groups) {
+            val mostRecentPlayed = items.mapNotNull { item ->
+                val hist = historyMap[item.uri.toString()] ?: historyPathMap[item.path]
+                if (hist != null) Pair(item, hist) else null
+            }.maxByOrNull { it.second.lastPlayedTimestamp }
+
+            if (mostRecentPlayed != null) {
+                val (item, hist) = mostRecentPlayed
+                result.add(
+                    FolderHistoryItem(
+                        folderPath = folderPath,
+                        folderName = item.folderName,
+                        lastPlayedVideoTitle = hist.title,
+                        lastPlayedUri = hist.mediaUri,
+                        lastPlayedTimestamp = hist.lastPlayedTimestamp,
+                        videoCount = items.size,
+                        thumbnailUri = item.uri
+                    )
+                )
+            }
+        }
+
+        return result.sortedByDescending { it.lastPlayedTimestamp }
+    }
+
+    fun buildFolderTree(
+        videos: List<VideoMediaItem>,
+        currentPath: String?,
+        playHistory: List<PlayHistoryEntity> = emptyList()
+    ): Pair<List<FolderTreeNode>, List<VideoMediaItem>> {
+        val historyMap = playHistory.associateBy { it.mediaUri }
+        val historyPathMap = playHistory.associateBy { it.mediaPath }
+
+        val isRoot = currentPath.isNullOrBlank() || currentPath == "ROOT"
+
+        if (isRoot) {
+            // Find root storage points (Internal Storage "/storage/emulated/0" and any other storage volumes)
+            val rootPaths = mutableSetOf<String>()
+            val internalRoot = Environment.getExternalStorageDirectory().absolutePath
+            rootPaths.add(internalRoot)
+
+            for (v in videos) {
+                val path = v.folderPath
+                if (path.startsWith(internalRoot)) {
+                    // Belongs to internal
+                } else if (path.startsWith("/storage/")) {
+                    val parts = path.split("/").filter { it.isNotBlank() }
+                    if (parts.size >= 2) {
+                        val vol = "/${parts[0]}/${parts[1]}"
+                        rootPaths.add(vol)
+                    }
+                } else if (path.isNotBlank()) {
+                    val root = "/" + path.trimStart('/').substringBefore('/')
+                    rootPaths.add(root)
+                }
+            }
+
+            val storageNodes = rootPaths.map { rootPath ->
+                val isInternal = rootPath == internalRoot
+                val name = if (isInternal) "Memori internal" else File(rootPath).name.ifBlank { "Kartu SD" }
+                val videosInRoot = videos.filter { it.folderPath == rootPath || it.folderPath.startsWith("$rootPath/") }
+                val directVideos = videos.filter { it.folderPath == rootPath }
+                
+                // Direct subfolders under this root
+                val directSubfolderNames = videosInRoot.mapNotNull { v ->
+                    if (v.folderPath.startsWith("$rootPath/")) {
+                        v.folderPath.removePrefix("$rootPath/").substringBefore("/")
+                    } else null
+                }.toSet()
+
+                val playedItem = videosInRoot.mapNotNull { item ->
+                    historyMap[item.uri.toString()] ?: historyPathMap[item.path]
+                }.maxByOrNull { it.lastPlayedTimestamp }
+
+                val newCount = videosInRoot.count { it.isNewVideo }
+                val oldestDate = videosInRoot.minOfOrNull { it.dateModified } ?: 0L
+                val isNewFolder = newCount > 0 && (videosInRoot.all { it.isNewVideo } || (System.currentTimeMillis() - oldestDate) < (7L * 24 * 3600 * 1000L))
+
+                FolderTreeNode(
+                    path = rootPath,
+                    name = name,
+                    isStorageRoot = true,
+                    subFolderCount = directSubfolderNames.size,
+                    directVideoCount = directVideos.size,
+                    totalVideoCount = videosInRoot.size,
+                    totalSizeBytes = videosInRoot.sumOf { it.sizeBytes },
+                    latestThumbnailUri = videosInRoot.maxByOrNull { it.dateModified }?.uri,
+                    lastPlayedVideoTitle = playedItem?.title,
+                    lastPlayedTimestamp = playedItem?.lastPlayedTimestamp,
+                    hasPlayHistory = playedItem != null,
+                    newVideoCount = newCount,
+                    isNewFolder = isNewFolder
+                )
+            }.sortedByDescending { it.isStorageRoot }
+
+            return Pair(storageNodes, emptyList())
+        } else {
+            val normalizedCurrent = currentPath.trimEnd('/')
+            val videosInSubtree = videos.filter { it.folderPath == normalizedCurrent || it.folderPath.startsWith("$normalizedCurrent/") }
+            val directVideos = videos.filter { it.folderPath == normalizedCurrent }
+
+            // Direct child folder names
+            val directChildMap = mutableMapOf<String, MutableList<VideoMediaItem>>()
+            for (v in videosInSubtree) {
+                if (v.folderPath.startsWith("$normalizedCurrent/")) {
+                    val rel = v.folderPath.removePrefix("$normalizedCurrent/")
+                    val directName = rel.substringBefore("/")
+                    val childPath = "$normalizedCurrent/$directName"
+                    directChildMap.getOrPut(childPath) { mutableListOf() }.add(v)
+                }
+            }
+
+            val childNodes = directChildMap.map { (childPath, childVideos) ->
+                val childName = File(childPath).name
+                val directInChild = childVideos.filter { it.folderPath == childPath }
+                val subSubNames = childVideos.mapNotNull { v ->
+                    if (v.folderPath.startsWith("$childPath/")) {
+                        v.folderPath.removePrefix("$childPath/").substringBefore("/")
+                    } else null
+                }.toSet()
+
+                val playedItem = childVideos.mapNotNull { item ->
+                    historyMap[item.uri.toString()] ?: historyPathMap[item.path]
+                }.maxByOrNull { it.lastPlayedTimestamp }
+
+                val newCount = childVideos.count { it.isNewVideo }
+                val oldestDate = childVideos.minOfOrNull { it.dateModified } ?: 0L
+                val isNewFolder = newCount > 0 && (childVideos.all { it.isNewVideo } || (System.currentTimeMillis() - oldestDate) < (7L * 24 * 3600 * 1000L))
+
+                FolderTreeNode(
+                    path = childPath,
+                    name = childName,
+                    isStorageRoot = false,
+                    subFolderCount = subSubNames.size,
+                    directVideoCount = directInChild.size,
+                    totalVideoCount = childVideos.size,
+                    totalSizeBytes = childVideos.sumOf { it.sizeBytes },
+                    latestThumbnailUri = childVideos.maxByOrNull { it.dateModified }?.uri,
+                    lastPlayedVideoTitle = playedItem?.title,
+                    lastPlayedTimestamp = playedItem?.lastPlayedTimestamp,
+                    hasPlayHistory = playedItem != null,
+                    newVideoCount = newCount,
+                    isNewFolder = isNewFolder
+                )
+            }.sortedWith(compareBy({ it.name.lowercase() }))
+
+            return Pair(childNodes, directVideos.sortedByDescending { it.dateModified })
+        }
+    }
+
+    fun buildBreadcrumbs(currentPath: String?): List<FolderBreadcrumb> {
+        val list = mutableListOf(FolderBreadcrumb("Media", "ROOT"))
+        if (currentPath.isNullOrBlank() || currentPath == "ROOT") {
+            return list
+        }
+
+        val internalRoot = Environment.getExternalStorageDirectory().absolutePath
+        if (currentPath.startsWith(internalRoot)) {
+            list.add(FolderBreadcrumb("Memori internal", internalRoot))
+            val sub = currentPath.removePrefix(internalRoot).trimStart('/')
+            if (sub.isNotBlank()) {
+                val segments = sub.split('/')
+                var accumulated = internalRoot
+                for (seg in segments) {
+                    accumulated = "$accumulated/$seg"
+                    list.add(FolderBreadcrumb(seg, accumulated))
+                }
+            }
+        } else {
+            val segments = currentPath.split('/').filter { it.isNotBlank() }
+            var accumulated = ""
+            for (seg in segments) {
+                accumulated = "$accumulated/$seg"
+                val label = if (accumulated == "/storage/emulated/0") "Memori internal" else seg
+                list.add(FolderBreadcrumb(label, accumulated))
+            }
+        }
+        return list
     }
 
     suspend fun deleteVideoFile(item: VideoMediaItem): Boolean = withContext(Dispatchers.IO) {

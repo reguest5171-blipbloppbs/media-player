@@ -32,8 +32,8 @@
     <string name="aspect_100">Original (100%)</string>
     <string name="lock_mode_pin_title">Enter Security PIN</string>
     <string name="lock_mode_set_pin_title">Set 4-Digit Security PIN</string>
-    <string name="encrypt_video_1ca">Encrypt to .1ca Vault</string>
-    <string name="decrypt_video_1ca">Decrypt &amp; Restore</string>
+    <string name="encrypt_video_1ca">Kunci ke Brankas Rahasia</string>
+    <string name="decrypt_video_1ca">Buka Kunci &amp; Pulihkan</string>
     <string name="network_ftp_stream">FTP Server Stream</string>
     <string name="network_smb_stream">SMB / Samba Share</string>
     <string name="network_url_stream">Direct URL Stream</string>

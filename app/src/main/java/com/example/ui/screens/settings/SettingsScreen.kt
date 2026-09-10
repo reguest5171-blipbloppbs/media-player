@@ -226,7 +226,7 @@ fun SettingsScreen(
 
             // Security & Mode Kunci Section
             Text(
-                text = "Security & Mode Kunci (.1ca Vault)",
+                text = "Security & Mode Kunci (Private Vault)",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold
@@ -262,7 +262,7 @@ fun SettingsScreen(
                             )
                             Text(
                                 text = if (savedPin.isNullOrBlank()) 
-                                    "Buat PIN untuk melindungi video rahasia .1ca (Tersimpan permanen)"
+                                    "Buat PIN untuk melindungi video rahasia brankas (Tersimpan permanen)"
                                 else 
                                     "PIN aktif • Tersimpan permanen walau Hapus Data Aplikasi",
                                 style = MaterialTheme.typography.bodySmall,

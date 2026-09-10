@@ -18,6 +18,14 @@ enum class AspectRatioMode(val label: String) {
     ORIGINAL("Original 100%")
 }
 
+enum class VideoEnhancerMode(val label: String, val description: String) {
+    OFF("Normal (Bawaan)", "Warna & kontras asli video tanpa filter"),
+    HDR_ADAPTIVE("Adaptive HDR Beautify", "Tone mapping dinamis & kontras S-Curve untuk detail bayangan jernih"),
+    SHADOW_LIFT("Shadow Boost (Film Gelap)", "Menaikkan kecerahan & gamma adegan gelap tanpa noise berlebih"),
+    VIVID_POP("Vivid Cinema Color", "Saturasi dinamis & warna hidup berkontras tinggi"),
+    CUSTOM("Kustom Mandiri", "Atur kontras, kecerahan video, dan saturasi secara manual")
+}
+
 enum class SortOption(val title: String) {
     NAME("Judul / Nama"),
     DATE("Tanggal Dimodifikasi"),
@@ -72,8 +80,18 @@ data class VideoMediaItem(
     val streamType: StreamType = StreamType.LOCAL,
     val playbackPosition: Long = 0L,
     val isWatched: Boolean = false,
-    val codec: String = "H.264 / HEVC"
+    val codec: String = "H.264 / HEVC",
+    val isNewVideo: Boolean = false
 ) {
+    val isCompleted: Boolean
+        get() = isWatched || (durationMs > 0 && playbackPosition >= (durationMs * 0.95))
+
+    val isInProgress: Boolean
+        get() = !isCompleted && playbackPosition > 3000L
+
+    val progressPercent: Int
+        get() = if (durationMs > 0) ((playbackPosition.toDouble() / durationMs) * 100).toInt().coerceIn(0, 100) else 0
+
     val formattedDuration: String
         get() {
             if (durationMs <= 0) return "00:00"
@@ -119,7 +137,13 @@ data class VideoFolder(
     val name: String,
     val videoCount: Int,
     val totalSizeBytes: Long,
-    val latestThumbnailUri: Uri? = null
+    val latestThumbnailUri: Uri? = null,
+    val subFolderCount: Int = 0,
+    val lastPlayedVideoTitle: String? = null,
+    val lastPlayedTimestamp: Long? = null,
+    val hasPlayHistory: Boolean = false,
+    val newVideoCount: Int = 0,
+    val isNewFolder: Boolean = false
 ) {
     val formattedTotalSize: String
         get() {
@@ -128,3 +152,34 @@ data class VideoFolder(
             return if (gb >= 1.0) String.format("%.2f GB", gb) else String.format("%.1f MB", mb)
         }
 }
+
+data class FolderBreadcrumb(
+    val label: String,
+    val path: String
+)
+
+data class FolderTreeNode(
+    val path: String,
+    val name: String,
+    val isStorageRoot: Boolean = false,
+    val subFolderCount: Int = 0,
+    val directVideoCount: Int = 0,
+    val totalVideoCount: Int = 0,
+    val totalSizeBytes: Long = 0L,
+    val latestThumbnailUri: Uri? = null,
+    val lastPlayedVideoTitle: String? = null,
+    val lastPlayedTimestamp: Long? = null,
+    val hasPlayHistory: Boolean = false,
+    val newVideoCount: Int = 0,
+    val isNewFolder: Boolean = false
+)
+
+data class FolderHistoryItem(
+    val folderPath: String,
+    val folderName: String,
+    val lastPlayedVideoTitle: String,
+    val lastPlayedUri: String,
+    val lastPlayedTimestamp: Long,
+    val videoCount: Int,
+    val thumbnailUri: Uri? = null
+)

@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.data.local.dao.MediaPlayerDao
 import com.example.data.local.entity.NetworkServerEntity
+import com.example.data.local.entity.NetworkShortcutEntity
 import com.example.data.local.entity.PlayHistoryEntity
 import com.example.data.local.entity.StreamBookmarkEntity
 
@@ -13,9 +14,10 @@ import com.example.data.local.entity.StreamBookmarkEntity
     entities = [
         PlayHistoryEntity::class,
         NetworkServerEntity::class,
-        StreamBookmarkEntity::class
+        StreamBookmarkEntity::class,
+        NetworkShortcutEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MediaPlayerDatabase : RoomDatabase() {

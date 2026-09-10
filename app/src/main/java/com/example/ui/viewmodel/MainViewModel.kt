@@ -28,6 +28,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import com.example.data.local.entity.NetworkShortcutEntity
+import com.example.data.model.FolderBreadcrumb
+import com.example.data.model.FolderHistoryItem
+import com.example.data.model.FolderTreeNode
+import java.io.File
+import android.os.Environment
+
 data class MainUiState(
     val isScanning: Boolean = false,
     val searchQuery: String = "",
@@ -45,11 +52,16 @@ data class MainUiState(
     val vaultExtension: String = "1ca",
     val activeTab: Int = 0, // 0: Lokal, 1: Network, 2: Vault
     val selectedFolder: VideoFolder? = null,
+    val folderTreeCurrentPath: String? = null,
+    val folderFilterMode: String = "ALL", // "ALL" or "PLAYED_HISTORY"
     val ftpBrowsingServer: NetworkServerEntity? = null,
     val ftpCurrentPath: String = "/",
     val ftpFiles: List<NetworkFileItem> = emptyList(),
     val ftpLoading: Boolean = false,
     val ftpErrorMessage: String? = null,
+    val isDownloadingRemoteFile: Boolean = false,
+    val downloadProgress: Float = 0f,
+    val downloadingFileName: String? = null,
     val messageSnackbar: String? = null
 )
 
@@ -72,6 +84,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val streamBookmarks: StateFlow<List<StreamBookmarkEntity>> = networkRepository.bookmarksFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val networkShortcuts: StateFlow<List<NetworkShortcutEntity>> = networkRepository.shortcutsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val folderPlaybackHistory: StateFlow<List<FolderHistoryItem>> = combine(
+        _rawVideos,
+        playHistory
+    ) { videos, history ->
+        mediaRepository.getFolderPlaybackHistory(videos, history)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val folderTreeBreadcrumbs: StateFlow<List<FolderBreadcrumb>> = _uiState
+        .map { it.folderTreeCurrentPath }
+        .distinctUntilChanged()
+        .map { path -> mediaRepository.buildBreadcrumbs(path) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), listOf(FolderBreadcrumb("Media", "ROOT")))
+
+    val folderTreeData: StateFlow<Pair<List<FolderTreeNode>, List<VideoMediaItem>>> = combine(
+        _rawVideos,
+        _uiState.map { it.folderTreeCurrentPath }.distinctUntilChanged(),
+        playHistory
+    ) { videos, currentPath, history ->
+        val visibleVideos = videos.filter {
+            !it.isEncrypted1ca || _uiState.value.isLockModeUnlocked
+        }
+        mediaRepository.buildFolderTree(visibleVideos, currentPath, history)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Pair(emptyList(), emptyList()))
 
     private data class VideoFilterParams(
         val isLockModeUnlocked: Boolean,
@@ -158,12 +197,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val vaultVideos: StateFlow<List<VideoMediaItem>> = combine(
         _rawVideos,
-        _uiState.map { it.isLockModeUnlocked }.distinctUntilChanged()
-    ) { videos, isUnlocked ->
-        if (isUnlocked) {
-            videos.filter { it.isEncrypted1ca }
+        _filterParams
+    ) { videos, params ->
+        if (!params.isLockModeUnlocked) {
+            emptyList<VideoMediaItem>()
         } else {
-            emptyList()
+            var list = videos.filter { it.isEncrypted1ca }
+            if (params.searchQuery.isNotBlank()) {
+                val q = params.searchQuery.lowercase().trim()
+                list = list.filter {
+                    it.displayName.lowercase().contains(q) ||
+                    it.folderName.lowercase().contains(q)
+                }
+            }
+            val asc = params.isSortAscending
+            when (params.sortOption) {
+                SortOption.NAME -> if (asc) list.sortedBy { it.displayName.lowercase() } else list.sortedByDescending { it.displayName.lowercase() }
+                SortOption.DATE -> if (asc) list.sortedBy { it.dateModified } else list.sortedByDescending { it.dateModified }
+                SortOption.SIZE -> if (asc) list.sortedBy { it.sizeBytes } else list.sortedByDescending { it.sizeBytes }
+                SortOption.DURATION -> if (asc) list.sortedBy { it.durationMs } else list.sortedByDescending { it.durationMs }
+                SortOption.RESOLUTION -> if (asc) list.sortedBy { it.width * it.height } else list.sortedByDescending { it.width * it.height }
+                SortOption.DATE_DESC -> if (!asc) list.sortedByDescending { it.dateModified } else list.sortedBy { it.dateModified }
+                SortOption.DATE_ASC -> if (!asc) list.sortedBy { it.dateModified } else list.sortedByDescending { it.dateModified }
+                SortOption.NAME_ASC -> if (!asc) list.sortedBy { it.displayName.lowercase() } else list.sortedByDescending { it.displayName.lowercase() }
+                SortOption.NAME_DESC -> if (!asc) list.sortedByDescending { it.displayName.lowercase() } else list.sortedBy { it.displayName.lowercase() }
+                SortOption.SIZE_DESC -> if (!asc) list.sortedByDescending { it.sizeBytes } else list.sortedBy { it.sizeBytes }
+                SortOption.SIZE_ASC -> if (!asc) list.sortedBy { it.sizeBytes } else list.sortedByDescending { it.sizeBytes }
+                SortOption.DURATION_DESC -> if (!asc) list.sortedByDescending { it.durationMs } else list.sortedBy { it.durationMs }
+                SortOption.DURATION_ASC -> if (!asc) list.sortedBy { it.durationMs } else list.sortedByDescending { it.durationMs }
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -451,7 +513,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val server = _uiState.value.ftpBrowsingServer
         if (server != null) {
             fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
-        } else {
+        } else if (_rawVideos.value.isEmpty()) {
             scanMedia()
         }
     }
@@ -498,9 +560,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val locked = mediaRepository.lockVideoToVault(video)
             if (locked != null) {
                 scanMedia()
-                _uiState.value = _uiState.value.copy(messageSnackbar = "Encrypted to .1ca vault")
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Video berhasil dikunci ke Brankas")
             } else {
-                _uiState.value = _uiState.value.copy(messageSnackbar = "Failed to lock video")
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal mengunci video")
             }
         }
     }
@@ -510,9 +572,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val unlocked = mediaRepository.unlockVideoFromVault(video)
             if (unlocked != null) {
                 scanMedia()
-                _uiState.value = _uiState.value.copy(messageSnackbar = "Restored original video")
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Video berhasil dipulihkan ke galeri normal")
             } else {
-                _uiState.value = _uiState.value.copy(messageSnackbar = "Failed to unlock video")
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal memulihkan video")
             }
         }
     }
@@ -584,6 +646,201 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteNetworkServer(id: Long) {
         viewModelScope.launch {
             networkRepository.removeServer(id)
+        }
+    }
+
+    fun setFolderFilterMode(mode: String) {
+        _uiState.value = _uiState.value.copy(folderFilterMode = mode)
+    }
+
+    fun navigateFolderTree(path: String?) {
+        val cleanPath = if (path == "ROOT" || path.isNullOrBlank()) null else path
+        _uiState.value = _uiState.value.copy(folderTreeCurrentPath = cleanPath)
+    }
+
+    fun navigateFolderTreeUp() {
+        val current = _uiState.value.folderTreeCurrentPath ?: return
+        val internalRoot = Environment.getExternalStorageDirectory().absolutePath
+        if (current == internalRoot || current == "/storage/emulated/0" || !current.contains("/")) {
+            _uiState.value = _uiState.value.copy(folderTreeCurrentPath = null)
+        } else {
+            val parent = current.substringBeforeLast("/")
+            if (parent.isBlank() || parent == "/storage") {
+                _uiState.value = _uiState.value.copy(folderTreeCurrentPath = null)
+            } else {
+                _uiState.value = _uiState.value.copy(folderTreeCurrentPath = parent)
+            }
+        }
+    }
+
+    // Network Shortcuts
+    fun addNetworkShortcut(
+        title: String,
+        serverId: Long?,
+        serverName: String,
+        serverType: String,
+        targetPath: String,
+        isDirectory: Boolean
+    ) {
+        viewModelScope.launch {
+            networkRepository.addShortcut(
+                NetworkShortcutEntity(
+                    title = title.ifBlank { targetPath.substringAfterLast("/").ifBlank { "Shortcut" } },
+                    serverId = serverId,
+                    serverName = serverName,
+                    serverType = serverType,
+                    targetPath = targetPath,
+                    isDirectory = isDirectory
+                )
+            )
+            _uiState.value = _uiState.value.copy(messageSnackbar = "Pintasan '$title' berhasil ditambahkan!")
+        }
+    }
+
+    fun deleteNetworkShortcut(id: Long) {
+        viewModelScope.launch {
+            networkRepository.removeShortcut(id)
+            _uiState.value = _uiState.value.copy(messageSnackbar = "Pintasan dihapus")
+        }
+    }
+
+    // Remote File Management
+    fun deleteRemoteFile(server: NetworkServerEntity, item: NetworkFileItem) {
+        viewModelScope.launch {
+            val result = networkRepository.deleteRemoteFile(server, item)
+            result.onSuccess {
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Berhasil menghapus '${item.name}' dari server")
+                fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal menghapus: ${err.localizedMessage}")
+            }
+        }
+    }
+
+    fun renameRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, newName: String) {
+        viewModelScope.launch {
+            val result = networkRepository.renameRemoteFile(server, item, newName)
+            result.onSuccess {
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Berhasil mengubah nama menjadi '$newName'")
+                fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal mengubah nama: ${err.localizedMessage}")
+            }
+        }
+    }
+
+    fun moveRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, targetDir: String) {
+        viewModelScope.launch {
+            val result = networkRepository.moveRemoteFile(server, item, targetDir)
+            result.onSuccess {
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Berhasil memindahkan '${item.name}' ke '$targetDir'")
+                fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal memindahkan: ${err.localizedMessage}")
+            }
+        }
+    }
+
+    fun copyRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, targetDir: String) {
+        viewModelScope.launch {
+            val result = networkRepository.copyRemoteFile(server, item, targetDir)
+            result.onSuccess {
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Berhasil menyalin '${item.name}'")
+                fetchFtpFiles(server, _uiState.value.ftpCurrentPath)
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(messageSnackbar = "Gagal menyalin: ${err.localizedMessage}")
+            }
+        }
+    }
+
+    fun downloadRemoteFileToLocal(server: NetworkServerEntity, item: NetworkFileItem) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isDownloadingRemoteFile = true,
+                downloadProgress = 0f,
+                downloadingFileName = item.name
+            )
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                ?: getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: getApplication<Application>().filesDir
+            val targetFile = File(downloadDir, item.name)
+
+            val result = networkRepository.downloadRemoteFile(
+                server = server,
+                item = item,
+                targetLocalFile = targetFile,
+                onProgress = { p ->
+                    _uiState.value = _uiState.value.copy(downloadProgress = p)
+                }
+            )
+
+            result.onSuccess { localFile ->
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingRemoteFile = false,
+                    downloadProgress = 1f,
+                    downloadingFileName = null,
+                    messageSnackbar = "Selesai mengunduh '${item.name}' ke folder Download"
+                )
+                scanMedia()
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingRemoteFile = false,
+                    downloadProgress = 0f,
+                    downloadingFileName = null,
+                    messageSnackbar = "Gagal mengunduh: ${err.localizedMessage}"
+                )
+            }
+        }
+    }
+
+    fun lockRemoteFileToVault(server: NetworkServerEntity, item: NetworkFileItem) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isDownloadingRemoteFile = true,
+                downloadProgress = 0f,
+                downloadingFileName = "Mengunci ${item.name}..."
+            )
+            val tempFile = File.createTempFile("net_vault", ".tmp")
+            val dlResult = networkRepository.downloadRemoteFile(
+                server = server,
+                item = item,
+                targetLocalFile = tempFile,
+                onProgress = { p ->
+                    _uiState.value = _uiState.value.copy(downloadProgress = p)
+                }
+            )
+
+            dlResult.onSuccess { downloadedTemp ->
+                val vaultDir = File(getApplication<Application>().filesDir, "vault_1ca").apply { mkdirs() }
+                val destFile = File(vaultDir, item.name)
+                downloadedTemp.copyTo(destFile, overwrite = true)
+                downloadedTemp.delete()
+                val encryptedFile = com.example.player.EncryptionUtil.encryptVideoTo1ca(destFile)
+
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingRemoteFile = false,
+                    downloadProgress = 1f,
+                    downloadingFileName = null
+                )
+
+                if (encryptedFile != null) {
+                    _uiState.value = _uiState.value.copy(
+                        messageSnackbar = "File '${item.name}' berhasil dikunci & dienkripsi ke Brankas!"
+                    )
+                    scanMedia()
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        messageSnackbar = "Gagal mengenkripsi file ke Brankas"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingRemoteFile = false,
+                    downloadProgress = 0f,
+                    downloadingFileName = null,
+                    messageSnackbar = "Gagal mengunduh file untuk Brankas: ${err.localizedMessage}"
+                )
+            }
         }
     }
 

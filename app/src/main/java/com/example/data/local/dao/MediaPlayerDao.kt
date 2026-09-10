@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.example.data.local.entity.NetworkServerEntity
+import com.example.data.local.entity.NetworkShortcutEntity
 import com.example.data.local.entity.PlayHistoryEntity
 import com.example.data.local.entity.StreamBookmarkEntity
 import kotlinx.coroutines.flow.Flow
@@ -49,4 +50,14 @@ interface MediaPlayerDao {
 
     @Query("DELETE FROM stream_bookmarks WHERE id = :id")
     suspend fun deleteBookmark(id: Long)
+
+    // Network Shortcuts
+    @Query("SELECT * FROM network_shortcuts ORDER BY addedTimestamp DESC")
+    fun getAllShortcuts(): Flow<List<NetworkShortcutEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertShortcut(shortcut: NetworkShortcutEntity): Long
+
+    @Query("DELETE FROM network_shortcuts WHERE id = :id")
+    suspend fun deleteShortcut(id: Long)
 }

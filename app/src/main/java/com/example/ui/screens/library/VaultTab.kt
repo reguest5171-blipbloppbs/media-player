@@ -58,6 +58,10 @@ fun VaultTab(
     hasPinConfigured: Boolean,
     vaultVideos: List<VideoMediaItem>,
     viewMode: ViewMode,
+    showThumbnails: Boolean = true,
+    showDuration: Boolean = true,
+    showSize: Boolean = true,
+    showResolution: Boolean = true,
     onUnlockClick: () -> Unit,
     onLockClick: () -> Unit,
     onSetupPinClick: () -> Unit,
@@ -118,7 +122,7 @@ fun VaultTab(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Video terenkripsi .1ca disembunyikan dari galeri publik dan diamankan dengan 4-digit PIN. PIN tetap tersimpan aman walau data aplikasi dibersihkan.",
+                        text = "Video rahasia disembunyikan dari galeri publik dan diamankan dengan 4-digit PIN. PIN tetap tersimpan aman walau data aplikasi dibersihkan.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -189,13 +193,13 @@ fun VaultTab(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Mode Kunci Active",
+                            text = "Mode Kunci Aktif",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = "${vaultVideos.size} .1ca encrypted files loaded",
+                            text = "${vaultVideos.size} video tersimpan di brankas",
                             color = Color(0xFFB2DFDB),
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -210,7 +214,7 @@ fun VaultTab(
                 ) {
                     Icon(imageVector = Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Lock Now", fontSize = 12.sp)
+                    Text("Kunci Sekarang", fontSize = 12.sp)
                 }
             }
         }
@@ -231,13 +235,13 @@ fun VaultTab(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Vault is Empty",
+                        text = "Brankas Kosong",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "To encrypt a video, go to 'All Videos' tab, tap the three-dots menu on any video, and select 'Lock to .1ca Vault'.",
+                        text = "Untuk mengamankan video ke brankas, buka tab 'Semua Video', tekan menu titik tiga pada video yang diinginkan, lalu pilih 'Kunci ke Brankas'.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -259,23 +263,33 @@ fun VaultTab(
                         VideoCard(
                             video = video,
                             onClick = { onVideoClick(video) },
-                            onMenuAction = { action -> onVideoMenuAction(video, action) }
+                            onMenuAction = { action -> onVideoMenuAction(video, action) },
+                            showThumbnails = showThumbnails,
+                            showDuration = showDuration,
+                            showSize = showSize,
+                            showResolution = showResolution
                         )
                     }
                 }
             } else {
+                val isCompact = (viewMode == ViewMode.COMPACT)
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
-                        .testTag("vault_list"),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .testTag(if (isCompact) "vault_compact_list" else "vault_list"),
+                    contentPadding = PaddingValues(if (isCompact) 8.dp else 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (isCompact) 4.dp else 8.dp)
                 ) {
                     items(vaultVideos, key = { it.id }) { video ->
                         VideoListItem(
                             video = video,
                             onClick = { onVideoClick(video) },
-                            onMenuAction = { action -> onVideoMenuAction(video, action) }
+                            onMenuAction = { action -> onVideoMenuAction(video, action) },
+                            showThumbnails = showThumbnails,
+                            showDuration = showDuration,
+                            showSize = showSize,
+                            showResolution = showResolution,
+                            isCompact = isCompact
                         )
                     }
                 }

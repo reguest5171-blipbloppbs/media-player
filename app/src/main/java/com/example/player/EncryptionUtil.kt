@@ -10,21 +10,48 @@ import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentHashMap
 
 object EncryptionUtil {
     private const val HEADER_MAGIC = "1CA_MEDIA_VAULT_V1\n"
     private val HEADER_BYTES = HEADER_MAGIC.toByteArray(Charsets.UTF_8)
     private const val XOR_KEY: Byte = 0x5A
 
+    private val inMemoryCache = ConcurrentHashMap<String, File>()
+
+    fun getCachedThumbnailFile(context: Context, file: File): File? {
+        val mem = inMemoryCache[file.absolutePath]
+        if (mem != null && mem.exists() && mem.length() > 0) {
+            return mem
+        }
+        val cacheDir = File(context.cacheDir, "vault_thumbs")
+        val thumbFile = File(cacheDir, "${file.name}.jpg")
+        if (thumbFile.exists() && thumbFile.length() > 0) {
+            inMemoryCache[file.absolutePath] = thumbFile
+            return thumbFile
+        }
+        return null
+    }
+
+    suspend fun getOrExtractThumbnailFileAsync(context: Context, file: File): File? = withContext(Dispatchers.IO) {
+        getOrExtractThumbnailFile(context, file)
+    }
+
     fun getOrExtractThumbnailFile(context: Context, file: File): File? {
+        val cached = getCachedThumbnailFile(context, file)
+        if (cached != null) return cached
+
         return try {
             val cacheDir = File(context.cacheDir, "vault_thumbs").apply { mkdirs() }
             val thumbFile = File(cacheDir, "${file.name}.jpg")
             if (thumbFile.exists() && thumbFile.length() > 0) {
+                inMemoryCache[file.absolutePath] = thumbFile
                 return thumbFile
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -67,9 +94,10 @@ object EncryptionUtil {
 
                 if (bitmap != null) {
                     val fos = FileOutputStream(thumbFile)
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos)
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, fos)
                     fos.flush()
                     fos.close()
+                    inMemoryCache[file.absolutePath] = thumbFile
                     return thumbFile
                 }
             }

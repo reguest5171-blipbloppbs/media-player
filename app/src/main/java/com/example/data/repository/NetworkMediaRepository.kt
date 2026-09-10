@@ -21,13 +21,20 @@ import org.apache.commons.net.ftp.FTPClient
 import org.apache.commons.net.ftp.FTPFile
 import java.io.IOException
 
+import com.example.data.local.entity.NetworkShortcutEntity
+import com.example.player.EncryptionUtil
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+
 data class NetworkFileItem(
     val name: String,
     val path: String,
     val isDirectory: Boolean,
-    val sizeBytes: Long,
-    val lastModified: Long,
-    val streamUri: String
+    val sizeBytes: Long = 0L,
+    val lastModified: Long = 0L,
+    val streamUri: String = ""
 )
 
 data class SampleStreamItem(
@@ -42,12 +49,16 @@ class NetworkMediaRepository(
 ) {
     val serversFlow: Flow<List<NetworkServerEntity>> = dao.getAllServers()
     val bookmarksFlow: Flow<List<StreamBookmarkEntity>> = dao.getAllBookmarks()
+    val shortcutsFlow: Flow<List<NetworkShortcutEntity>> = dao.getAllShortcuts()
 
     suspend fun addServer(server: NetworkServerEntity): Long = dao.insertServer(server)
     suspend fun removeServer(id: Long) = dao.deleteServer(id)
 
     suspend fun addBookmark(bookmark: StreamBookmarkEntity): Long = dao.insertBookmark(bookmark)
     suspend fun removeBookmark(id: Long) = dao.deleteBookmark(id)
+
+    suspend fun addShortcut(shortcut: NetworkShortcutEntity): Long = dao.insertShortcut(shortcut)
+    suspend fun removeShortcut(id: Long) = dao.deleteShortcut(id)
 
     // Curated, 100% working and fast sample streaming URLs for instant testing
     fun getPresetSampleStreams(): List<SampleStreamItem> {
@@ -429,5 +440,199 @@ class NetworkMediaRepository(
             .filter { it.isNotBlank() }
 
         return fileName.endsWith(".1ca", ignoreCase = true) || customExtList.any { ext -> fileName.endsWith(".$ext", ignoreCase = true) }
+    }
+
+    // Remote File Management (Delete, Rename, Move, Copy, Download, Lock to Vault)
+    suspend fun deleteRemoteFile(server: NetworkServerEntity, item: NetworkFileItem): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            if (server.type.equals("SMB", ignoreCase = true)) {
+                val cifs = getCifsContext(server)
+                val cleanPath = item.path.trim().removePrefix("/")
+                val smbUrl = "smb://${server.host}/$cleanPath"
+                val smbFile = SmbFile(smbUrl, cifs)
+                if (smbFile.exists()) {
+                    smbFile.delete()
+                    Result.success(true)
+                } else {
+                    Result.failure(IOException("File tidak ditemukan di server Samba"))
+                }
+            } else {
+                val ftp = FTPClient()
+                ftp.connect(server.host, server.port)
+                val login = if (server.isAnonymous || server.username.isBlank()) ftp.login("anonymous", "anonymous") else ftp.login(server.username, server.password)
+                if (!login) return@withContext Result.failure(IOException("FTP Login gagal"))
+                ftp.enterLocalPassiveMode()
+                val deleted = if (item.isDirectory) ftp.removeDirectory(item.path) else ftp.deleteFile(item.path)
+                ftp.disconnect()
+                if (deleted) Result.success(true) else Result.failure(IOException("Gagal menghapus file dari server FTP"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun renameRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, newName: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            if (server.type.equals("SMB", ignoreCase = true)) {
+                val cifs = getCifsContext(server)
+                val cleanPath = item.path.trim().removePrefix("/").removeSuffix("/")
+                val parentPath = if (cleanPath.contains("/")) cleanPath.substringBeforeLast("/") else ""
+                val newRelPath = if (parentPath.isNotBlank()) "$parentPath/$newName" else newName
+                val sourceUrl = "smb://${server.host}/$cleanPath"
+                val targetUrl = "smb://${server.host}/$newRelPath"
+                val sourceFile = SmbFile(sourceUrl, cifs)
+                val targetFile = SmbFile(targetUrl, cifs)
+                sourceFile.renameTo(targetFile)
+                Result.success(true)
+            } else {
+                val ftp = FTPClient()
+                ftp.connect(server.host, server.port)
+                val login = if (server.isAnonymous || server.username.isBlank()) ftp.login("anonymous", "anonymous") else ftp.login(server.username, server.password)
+                if (!login) return@withContext Result.failure(IOException("FTP Login gagal"))
+                ftp.enterLocalPassiveMode()
+                val parent = if (item.path.contains("/")) item.path.substringBeforeLast("/") else ""
+                val targetPath = if (parent.isNotBlank()) "$parent/$newName" else "/$newName"
+                val renamed = ftp.rename(item.path, targetPath)
+                ftp.disconnect()
+                if (renamed) Result.success(true) else Result.failure(IOException("Gagal mengubah nama file di FTP"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun moveRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, targetDirectory: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val cleanDir = targetDirectory.trim().removePrefix("/").removeSuffix("/")
+            if (server.type.equals("SMB", ignoreCase = true)) {
+                val cifs = getCifsContext(server)
+                val cleanPath = item.path.trim().removePrefix("/").removeSuffix("/")
+                val sourceUrl = "smb://${server.host}/$cleanPath"
+                val targetUrl = if (cleanDir.isBlank()) "smb://${server.host}/${item.name}" else "smb://${server.host}/$cleanDir/${item.name}"
+                val sourceFile = SmbFile(sourceUrl, cifs)
+                val targetFile = SmbFile(targetUrl, cifs)
+                sourceFile.renameTo(targetFile)
+                Result.success(true)
+            } else {
+                val ftp = FTPClient()
+                ftp.connect(server.host, server.port)
+                val login = if (server.isAnonymous || server.username.isBlank()) ftp.login("anonymous", "anonymous") else ftp.login(server.username, server.password)
+                if (!login) return@withContext Result.failure(IOException("FTP Login gagal"))
+                ftp.enterLocalPassiveMode()
+                val targetPath = if (cleanDir.isBlank()) "/${item.name}" else "/$cleanDir/${item.name}"
+                val moved = ftp.rename(item.path, targetPath)
+                ftp.disconnect()
+                if (moved) Result.success(true) else Result.failure(IOException("Gagal memindahkan file di FTP"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun copyRemoteFile(server: NetworkServerEntity, item: NetworkFileItem, targetDirectory: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val cleanDir = targetDirectory.trim().removePrefix("/").removeSuffix("/")
+            if (server.type.equals("SMB", ignoreCase = true)) {
+                val cifs = getCifsContext(server)
+                val cleanPath = item.path.trim().removePrefix("/").removeSuffix("/")
+                val sourceUrl = "smb://${server.host}/$cleanPath"
+                val targetUrl = if (cleanDir.isBlank()) "smb://${server.host}/Copy_${item.name}" else "smb://${server.host}/$cleanDir/Copy_${item.name}"
+                val sourceFile = SmbFile(sourceUrl, cifs)
+                val targetFile = SmbFile(targetUrl, cifs)
+                sourceFile.copyTo(targetFile)
+                Result.success(true)
+            } else {
+                // FTP stream copy
+                val ftp = FTPClient()
+                ftp.connect(server.host, server.port)
+                val login = if (server.isAnonymous || server.username.isBlank()) ftp.login("anonymous", "anonymous") else ftp.login(server.username, server.password)
+                if (!login) return@withContext Result.failure(IOException("FTP Login gagal"))
+                ftp.enterLocalPassiveMode()
+                ftp.setFileType(FTP.BINARY_FILE_TYPE)
+                val targetPath = if (cleanDir.isBlank()) "/Copy_${item.name}" else "/$cleanDir/Copy_${item.name}"
+                val inputStream = ftp.retrieveFileStream(item.path)
+                if (inputStream != null) {
+                    val tempFile = File.createTempFile("ftp_copy", ".tmp")
+                    FileOutputStream(tempFile).use { out -> inputStream.copyTo(out) }
+                    ftp.completePendingCommand()
+                    tempFile.inputStream().use { input ->
+                        ftp.storeFile(targetPath, input)
+                    }
+                    tempFile.delete()
+                    ftp.disconnect()
+                    Result.success(true)
+                } else {
+                    ftp.disconnect()
+                    Result.failure(IOException("Gagal membaca file sumber di FTP"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun downloadRemoteFile(
+        server: NetworkServerEntity,
+        item: NetworkFileItem,
+        targetLocalFile: File,
+        onProgress: (Float) -> Unit = {}
+    ): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            targetLocalFile.parentFile?.mkdirs()
+            val totalBytes = item.sizeBytes
+            var bytesCopied = 0L
+
+            if (server.type.equals("SMB", ignoreCase = true)) {
+                val cifs = getCifsContext(server)
+                val cleanPath = item.path.trim().removePrefix("/")
+                val smbUrl = "smb://${server.host}/$cleanPath"
+                val smbFile = SmbFile(smbUrl, cifs)
+                smbFile.openInputStream().use { input ->
+                    FileOutputStream(targetLocalFile).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                            bytesCopied += read
+                            if (totalBytes > 0) {
+                                onProgress(bytesCopied.toFloat() / totalBytes)
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+                Result.success(targetLocalFile)
+            } else {
+                val ftp = FTPClient()
+                ftp.connect(server.host, server.port)
+                val login = if (server.isAnonymous || server.username.isBlank()) ftp.login("anonymous", "anonymous") else ftp.login(server.username, server.password)
+                if (!login) return@withContext Result.failure(IOException("FTP Login gagal"))
+                ftp.enterLocalPassiveMode()
+                ftp.setFileType(FTP.BINARY_FILE_TYPE)
+                val inputStream = ftp.retrieveFileStream(item.path)
+                if (inputStream != null) {
+                    FileOutputStream(targetLocalFile).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var read: Int
+                        while (inputStream.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                            bytesCopied += read
+                            if (totalBytes > 0) {
+                                onProgress(bytesCopied.toFloat() / totalBytes)
+                            }
+                        }
+                        output.flush()
+                    }
+                    ftp.completePendingCommand()
+                    ftp.disconnect()
+                    Result.success(targetLocalFile)
+                } else {
+                    ftp.disconnect()
+                    Result.failure(IOException("Gagal mengunduh file dari FTP"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

@@ -19,6 +19,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -35,18 +40,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.graphicsLayer
+import com.example.data.model.VideoEnhancerMode
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -66,15 +79,19 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.BrightnessMedium
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
@@ -82,12 +99,15 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +115,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -143,10 +164,12 @@ fun PlayerScreen(
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
     val activePlayer by viewModel.activePlayer.collectAsStateWithLifecycle()
     val currentMedia by viewModel.currentMedia.collectAsStateWithLifecycle()
+    val playlist by viewModel.playlist.collectAsStateWithLifecycle()
     val controlsVisible by viewModel.controlsVisible.collectAsStateWithLifecycle()
     val isLocked by viewModel.isScreenLocked.collectAsStateWithLifecycle()
     val gestureState by viewModel.gestureState.collectAsStateWithLifecycle()
     val doubleTapRipple by viewModel.doubleTapRipple.collectAsStateWithLifecycle()
+    val resNoticePos by viewModel.resumeNoticePosition.collectAsStateWithLifecycle()
 
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubPositionMs by remember { mutableFloatStateOf(0f) }
@@ -156,10 +179,31 @@ fun PlayerScreen(
     var showSubtitleDialog by remember { mutableStateOf(false) }
     var showExtSubPicker by remember { mutableStateOf(false) }
     var showExtAudioPicker by remember { mutableStateOf(false) }
+    var showEnhancerDialog by remember { mutableStateOf(false) }
+    var showPlaylistSheet by remember { mutableStateOf(false) }
 
     val configuration = LocalConfiguration.current
 
-    // Follow video aspect ratio on initial load if configured with safe try-catch
+    // Set screen orientation immediately from media metadata if available
+    LaunchedEffect(currentMedia?.id) {
+        try {
+            val media = currentMedia
+            if (activity != null && media != null) {
+                if (media.width > 0 && media.height > 0) {
+                    val isPortraitVideo = media.height > media.width
+                    activity.requestedOrientation = if (isPortraitVideo) {
+                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    }
+                } else {
+                    activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    // Follow video aspect ratio when ExoPlayer reports resolution
     LaunchedEffect(playerState.videoWidth, playerState.videoHeight) {
         try {
             if (activity != null && playerState.videoWidth > 0 && playerState.videoHeight > 0) {
@@ -202,7 +246,7 @@ fun PlayerScreen(
 
         onDispose {
             try {
-                activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 activity?.window?.let { win ->
                     win.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     val lp = win.attributes
@@ -292,12 +336,16 @@ fun PlayerScreen(
                 }
             }
     ) {
-        // Player Surface isolated to prevent unnecessary recompositions on tick
+        // Player Surface with GPU Hardware Color Grading & Tone Mapping
         PlayerSurface(
             decoderMode = playerState.decoderMode,
             videoWidth = playerState.videoWidth,
             videoHeight = playerState.videoHeight,
             aspectRatioMode = playerState.aspectRatioMode,
+            videoEnhancerMode = playerState.videoEnhancerMode,
+            videoContrast = playerState.videoContrast,
+            videoBrightness = playerState.videoBrightness,
+            videoSaturation = playerState.videoSaturation,
             activePlayer = activePlayer,
             viewModel = viewModel
         )
@@ -798,6 +846,7 @@ fun PlayerScreen(
                                 listOf(Color(0xEE000000), Color.Transparent)
                             )
                         )
+                        .statusBarsPadding()
                         .padding(horizontal = 12.dp, vertical = 12.dp)
                 ) {
                     Row(
@@ -874,6 +923,15 @@ fun PlayerScreen(
 
                         Spacer(modifier = Modifier.width(4.dp))
 
+                        // Video Enhancer & HDR Button
+                        IconButton(onClick = { showEnhancerDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Video Enhancer HDR",
+                                tint = if (playerState.videoEnhancerMode != VideoEnhancerMode.OFF) Color(0xFFFFD54F) else Color.White
+                            )
+                        }
+
                         // Decoder Debug Info Button
                         IconButton(onClick = { viewModel.toggleDebugDialog() }) {
                             Icon(
@@ -883,7 +941,7 @@ fun PlayerScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
 
                         // Audio Track button
                         IconButton(onClick = { showAudioDialog = true }) {
@@ -903,6 +961,18 @@ fun PlayerScreen(
                             )
                         }
 
+                        // Playlist button
+                        IconButton(
+                            onClick = { showPlaylistSheet = !showPlaylistSheet },
+                            modifier = Modifier.testTag("playlist_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlaylistPlay,
+                                contentDescription = "Daftar Putar",
+                                tint = if (showPlaylistSheet) Color(0xFFFFD54F) else Color.White
+                            )
+                        }
+
                         // Lock Controls button
                         IconButton(onClick = { viewModel.toggleScreenLock() }) {
                             Icon(
@@ -910,6 +980,76 @@ fun PlayerScreen(
                                 contentDescription = "Lock Screen",
                                 tint = Color.White
                             )
+                        }
+                    }
+                }
+
+                // Resume Playback Banner Notice (Mulai dari awal)
+                AnimatedVisibility(
+                    visible = (resNoticePos ?: 0L) > 3000L,
+                    enter = fadeIn() + slideInVertically(),
+                    exit = fadeOut() + slideOutVertically(),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 76.dp)
+                ) {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xEE1C1B1F)),
+                        border = BorderStroke(1.dp, Color(0xFFFFD54F)),
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = null,
+                                tint = Color(0xFFFFD54F),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Melanjutkan dari ${formatTime(resNoticePos ?: 0L)}",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Button(
+                                onClick = { viewModel.restartFromBeginning() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD54F)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.testTag("restart_from_beginning_banner_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Replay,
+                                    contentDescription = "Mulai dari awal",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Mulai dari awal",
+                                    color = Color.Black,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = { viewModel.dismissResumeNotice() },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Tutup",
+                                    tint = Color.LightGray,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -979,6 +1119,7 @@ fun PlayerScreen(
                                 listOf(Color.Transparent, Color(0xEE000000))
                             )
                         )
+                        .navigationBarsPadding()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Column {
@@ -1003,6 +1144,7 @@ fun PlayerScreen(
                                 onValueChange = { fraction ->
                                     isScrubbing = true
                                     scrubPositionMs = fraction * durationMs
+                                    viewModel.dismissResumeNotice()
                                 },
                                 onValueChangeFinished = {
                                     isScrubbing = false
@@ -1033,7 +1175,7 @@ fun PlayerScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Left actions (Aspect ratio, Speed)
+                            // Left actions (Aspect ratio, Speed, Enhancer)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 IconButton(
                                     onClick = { viewModel.cycleAspectRatio() },
@@ -1054,6 +1196,36 @@ fun PlayerScreen(
                                         imageVector = Icons.Default.Speed,
                                         contentDescription = "Playback Speed",
                                         tint = Color.White
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { showEnhancerDialog = true },
+                                    modifier = Modifier.testTag("enhancer_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Video Enhancer HDR",
+                                        tint = if (playerState.videoEnhancerMode != VideoEnhancerMode.OFF) Color(0xFFFFD54F) else Color.White
+                                    )
+                                }
+
+                                TextButton(
+                                    onClick = { viewModel.restartFromBeginning() },
+                                    modifier = Modifier.testTag("start_from_beginning_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Replay,
+                                        contentDescription = "Mulai dari awal",
+                                        tint = Color(0xFFFFD54F),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Awal",
+                                        color = Color(0xFFFFD54F),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
@@ -1102,6 +1274,110 @@ fun PlayerScreen(
                 }
             }
         }
+
+        // Right-Side Transparent Playlist Sheet Overlay
+        AnimatedVisibility(
+            visible = showPlaylistSheet,
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 340.dp else 280.dp)
+                .align(Alignment.CenterEnd)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(vertical = 12.dp, horizontal = 8.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xEE121212),
+                border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PlaylistPlay,
+                                contentDescription = null,
+                                tint = Color(0xFFFFD54F)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Daftar Putar (${playlist.size})",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        IconButton(onClick = { showPlaylistSheet = false }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Tutup",
+                                tint = Color.LightGray
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = Color(0x33FFFFFF)
+                    )
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(playlist, key = { it.id }) { item ->
+                            val isPlaying = item.id == currentMedia?.id
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isPlaying) Color(0x442196F3) else Color(0x1AFFFFFF))
+                                    .clickable {
+                                        viewModel.playMediaItem(item, playlist)
+                                        showPlaylistSheet = false
+                                    }
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isPlaying) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color(0xFF64B5F6),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.displayName,
+                                        color = if (isPlaying) Color(0xFF64B5F6) else Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = item.formattedDuration,
+                                        color = Color.Gray,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Speed Selection Dialog
@@ -1110,13 +1386,15 @@ fun PlayerScreen(
         Dialog(onDismissRequest = { showSpeedDialog = false }) {
             Card(
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = Color(0xEE1A1A1A)),
+                border = BorderStroke(1.dp, Color(0x33FFFFFF))
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text(
-                        text = "Playback Speed",
+                        text = "Kecepatan Pemutaran",
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     speeds.forEach { speed ->
@@ -1137,13 +1415,13 @@ fun PlayerScreen(
                                 text = "${speed}x",
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                color = if (isSelected) Color(0xFF64B5F6) else Color.White
                             )
                             if (isSelected) {
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
+                                    tint = Color(0xFF64B5F6)
                                 )
                             }
                         }
@@ -1166,7 +1444,8 @@ fun PlayerScreen(
                     .heightIn(max = if (isLandscape) 340.dp else 520.dp)
                     .padding(8.dp),
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = Color(0xEE1A1A1A)),
+                border = BorderStroke(1.dp, Color(0x33FFFFFF))
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Row(
@@ -1177,10 +1456,11 @@ fun PlayerScreen(
                         Text(
                             text = "Pengaturan Trek Audio",
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
                         IconButton(onClick = { showAudioDialog = false }) {
-                            Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup")
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup", tint = Color.LightGray)
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1193,9 +1473,9 @@ fun PlayerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(imageVector = Icons.Default.Audiotrack, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(imageVector = Icons.Default.Audiotrack, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF64B5F6))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("📂 Buka Audio Eksternal (File HP / URL)")
+                        Text("📂 Buka Audio Eksternal (File HP / URL)", color = Color.White)
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1204,7 +1484,7 @@ fun PlayerScreen(
                         Text(
                             text = "Tidak ada trek audio internal bawaan video.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = Color.Gray,
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
                     } else {
@@ -1232,13 +1512,13 @@ fun PlayerScreen(
                                         text = track.label,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = if (track.isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (track.isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        color = if (track.isSelected) Color(0xFF64B5F6) else Color.White
                                     )
                                     if (track.isSelected) {
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
+                                            tint = Color(0xFF64B5F6)
                                         )
                                     }
                                 }
@@ -1264,7 +1544,8 @@ fun PlayerScreen(
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(6.dp),
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = Color(0xEE1A1A1A)),
+                border = BorderStroke(1.dp, Color(0x33FFFFFF))
             ) {
                 if (isLandscape) {
                     // Two-column layout in landscape: Left for settings, Right for scrollable subtitle list
@@ -1751,6 +2032,15 @@ fun PlayerScreen(
         )
     }
 
+    if (showEnhancerDialog) {
+        VideoEnhancerDialog(
+            playerState = playerState,
+            onDismiss = { showEnhancerDialog = false },
+            onSelectPreset = { viewModel.setVideoEnhancerMode(it) },
+            onAdjustColors = { c, b, s -> viewModel.setVideoColorAdjustments(c, b, s) }
+        )
+    }
+
     if (playerState.showDebugDialog) {
         DecoderDebugDialog(
             playerState = playerState,
@@ -2079,6 +2369,274 @@ private fun DecoderDebugDialog(
 }
 
 @Composable
+private fun VideoEnhancerDialog(
+    playerState: com.example.player.PlayerState,
+    onDismiss: () -> Unit,
+    onSelectPreset: (VideoEnhancerMode) -> Unit,
+    onAdjustColors: (contrast: Float, brightness: Float, saturation: Float) -> Unit
+) {
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(if (isLandscape) 0.70f else 0.94f)
+                .heightIn(max = if (isLandscape) 360.dp else 600.dp)
+                .padding(8.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161822))
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF2E2606)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = Color(0xFFFFD54F),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Adaptive Contrast & Video Enhancer",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Pengolahan warna & kontras langsung pada stream video (Anti Patah-Patah)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Tutup", tint = Color.LightGray)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Presets Section
+                Text(
+                    text = "PILIHAN PRESET VISUAL",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFFD54F)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    VideoEnhancerMode.values().forEach { mode ->
+                        val isSelected = playerState.videoEnhancerMode == mode
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isSelected) Color(0xFFFFD54F)
+                                    else Color(0xFF232638)
+                                )
+                                .clickable { onSelectPreset(mode) }
+                                .padding(vertical = 10.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = when (mode) {
+                                    VideoEnhancerMode.OFF -> "Bawaan"
+                                    VideoEnhancerMode.HDR_ADAPTIVE -> "HDR AI"
+                                    VideoEnhancerMode.SHADOW_LIFT -> "Shadow"
+                                    VideoEnhancerMode.VIVID_POP -> "Vivid"
+                                    VideoEnhancerMode.CUSTOM -> "Kustom"
+                                },
+                                color = if (isSelected) Color.Black else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Description box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF0F111A))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = playerState.videoEnhancerMode.description,
+                        fontSize = 11.sp,
+                        color = Color(0xFFCFD8DC),
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Manual Slider Adjustments
+                Text(
+                    text = "PENGATURAN WARNA & TONE VIDEO",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFFD54F)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // 1. Contrast Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Kontras Dinamis", color = Color.White, fontSize = 13.sp)
+                    Text(
+                        text = String.format("%.2fx", playerState.videoContrast),
+                        color = Color(0xFFFFD54F),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Slider(
+                    value = playerState.videoContrast,
+                    onValueChange = { newContrast ->
+                        onAdjustColors(newContrast, playerState.videoBrightness, playerState.videoSaturation)
+                    },
+                    valueRange = 0.5f..2.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFFFFD54F),
+                        activeTrackColor = Color(0xFFFFD54F),
+                        inactiveTrackColor = Color(0xFF374151)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 2. Video Brightness & Shadow Lift (Not OS screen brightness)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Shadow Boost / Kecerahan Video", color = Color.White, fontSize = 13.sp)
+                        Text("Menaikkan detail film gelap tanpa menyilaukan layar HP", color = Color.Gray, fontSize = 10.sp)
+                    }
+                    Text(
+                        text = String.format("%+.2f", playerState.videoBrightness),
+                        color = Color(0xFFFFD54F),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Slider(
+                    value = playerState.videoBrightness,
+                    onValueChange = { newBrightness ->
+                        onAdjustColors(playerState.videoContrast, newBrightness, playerState.videoSaturation)
+                    },
+                    valueRange = -0.5f..0.5f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFFFFD54F),
+                        activeTrackColor = Color(0xFFFFD54F),
+                        inactiveTrackColor = Color(0xFF374151)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 3. Saturation Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Saturasi Warna Video", color = Color.White, fontSize = 13.sp)
+                    Text(
+                        text = String.format("%.2fx", playerState.videoSaturation),
+                        color = Color(0xFFFFD54F),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Slider(
+                    value = playerState.videoSaturation,
+                    onValueChange = { newSat ->
+                        onAdjustColors(playerState.videoContrast, playerState.videoBrightness, newSat)
+                    },
+                    valueRange = 0.0f..2.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFFFFD54F),
+                        activeTrackColor = Color(0xFFFFD54F),
+                        inactiveTrackColor = Color(0xFF374151)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Footer Actions
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { onSelectPreset(VideoEnhancerMode.OFF) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Reset Bawaan", color = Color.LightGray)
+                    }
+
+                    androidx.compose.material3.Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD54F))
+                    ) {
+                        Text("Selesai", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DebugItemRow(label: String, value: String, isHighlight: Boolean = false) {
     Row(
         modifier = Modifier
@@ -2118,9 +2676,41 @@ fun PlayerSurface(
     videoWidth: Int,
     videoHeight: Int,
     aspectRatioMode: AspectRatioMode,
+    videoEnhancerMode: VideoEnhancerMode = VideoEnhancerMode.OFF,
+    videoContrast: Float = 1.0f,
+    videoBrightness: Float = 0.0f,
+    videoSaturation: Float = 1.0f,
     activePlayer: androidx.media3.common.Player?,
     viewModel: com.example.ui.viewmodel.PlayerViewModel
 ) {
+    fun applyGpuEnhancer(view: android.view.View) {
+        try {
+            if (videoEnhancerMode == VideoEnhancerMode.OFF) {
+                view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+            } else {
+                val satMatrix = android.graphics.ColorMatrix().apply {
+                    setSaturation(videoSaturation)
+                }
+                val scale = videoContrast
+                val translate = ((-0.5f * scale + 0.5f + videoBrightness) * 255f)
+                val contrastMatrix = android.graphics.ColorMatrix(floatArrayOf(
+                    scale, 0f, 0f, 0f, translate,
+                    0f, scale, 0f, 0f, translate,
+                    0f, 0f, scale, 0f, translate,
+                    0f, 0f, 0f, 1f, 0f
+                ))
+                val combined = android.graphics.ColorMatrix().apply {
+                    postConcat(satMatrix)
+                    postConcat(contrastMatrix)
+                }
+                val paint = android.graphics.Paint().apply {
+                    colorFilter = android.graphics.ColorMatrixColorFilter(combined)
+                }
+                view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+            }
+        } catch (_: Throwable) {}
+    }
+
     if (decoderMode == DecoderMode.VLC) {
         AndroidView(
             factory = { ctx ->
@@ -2153,6 +2743,7 @@ fun PlayerSurface(
             },
             update = { aspectRatioFrameLayout ->
                 try {
+                    applyGpuEnhancer(aspectRatioFrameLayout)
                     if (videoWidth > 0 && videoHeight > 0) {
                         aspectRatioFrameLayout.setAspectRatio(videoWidth.toFloat() / videoHeight.toFloat())
                         when (aspectRatioMode) {
@@ -2201,6 +2792,7 @@ fun PlayerSurface(
             },
             update = { aspectRatioFrameLayout ->
                 try {
+                    applyGpuEnhancer(aspectRatioFrameLayout)
                     if (videoWidth > 0 && videoHeight > 0) {
                         aspectRatioFrameLayout.setAspectRatio(videoWidth.toFloat() / videoHeight.toFloat())
                         when (aspectRatioMode) {
@@ -2236,6 +2828,7 @@ fun PlayerSurface(
             },
             update = { playerView ->
                 try {
+                    applyGpuEnhancer(playerView)
                     if (playerView.player !== activePlayer) {
                         playerView.player = activePlayer
                     }

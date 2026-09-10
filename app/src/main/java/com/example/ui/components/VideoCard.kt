@@ -31,8 +31,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,13 +80,18 @@ fun VideoCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        val thumbModel = remember(video.uri, video.path, video.isEncrypted1ca) {
+        val thumbModel by produceState<Any?>(initialValue = null, video.uri, video.path, video.isEncrypted1ca) {
             if (video.isEncrypted1ca && video.path.isNotBlank()) {
                 val file = File(video.path)
-                val cached = EncryptionUtil.getOrExtractThumbnailFile(context, file)
-                cached ?: video.uri
+                val fastCached = EncryptionUtil.getCachedThumbnailFile(context, file)
+                if (fastCached != null) {
+                    value = fastCached
+                } else {
+                    val extracted = EncryptionUtil.getOrExtractThumbnailFileAsync(context, file)
+                    value = extracted ?: video.uri
+                }
             } else {
-                video.uri
+                value = video.uri
             }
         }
 
@@ -169,6 +177,36 @@ fun VideoCard(
                         }
                     }
 
+                    // Status badge (top-right of thumbnail)
+                    if (video.isCompleted || video.isInProgress || video.isNewVideo) {
+                        Box(
+                            modifier = Modifier
+                                .padding(6.dp)
+                                .align(Alignment.TopEnd)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    when {
+                                        video.isCompleted -> Color(0xEE2E7D32) // Green Dark / Finished
+                                        video.isInProgress -> Color(0xEEE65100) // Deep Orange / In progress
+                                        video.isNewVideo -> Color(0xEE0288D1) // Bright Blue / New
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = when {
+                                    video.isCompleted -> "Tamat"
+                                    video.isInProgress -> "${video.progressPercent}% Belum Tamat"
+                                    else -> "BARU"
+                                },
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
                     // Duration badge (bottom-right)
                     if (showDuration) {
                         Box(
@@ -184,6 +222,24 @@ fun VideoCard(
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    // In-progress playback bar at bottom edge of thumbnail
+                    if (video.isInProgress && video.progressPercent > 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(3.dp)
+                                .align(Alignment.BottomStart)
+                                .background(Color(0x66000000))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(video.progressPercent / 100f)
+                                    .height(3.dp)
+                                    .background(Color(0xFFFF9800))
                             )
                         }
                     }
@@ -275,7 +331,7 @@ fun VideoCard(
                         )
                         if (video.isEncrypted1ca) {
                             DropdownMenuItem(
-                                text = { Text("Unlock / Restore Video") },
+                                text = { Text("Buka Kunci ke Galeri") },
                                 onClick = {
                                     menuExpanded = false
                                     onMenuAction(VideoMenuAction.UNLOCK_VAULT)
@@ -283,7 +339,7 @@ fun VideoCard(
                             )
                         } else {
                             DropdownMenuItem(
-                                text = { Text("Lock to .1ca Vault") },
+                                text = { Text("Kunci ke Brankas") },
                                 onClick = {
                                     menuExpanded = false
                                     onMenuAction(VideoMenuAction.LOCK_VAULT)

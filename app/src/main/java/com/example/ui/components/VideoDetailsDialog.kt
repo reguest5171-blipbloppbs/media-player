@@ -95,7 +95,7 @@ fun VideoDetailsDialog(
                     value = if (video.width > 0 && video.height > 0) "${video.width} x ${video.height} (${video.resolutionTag})" else "Auto / Adaptive (${video.resolutionTag})"
                 )
                 DetailRow(label = "Format / MIME", value = video.mimeType)
-                DetailRow(label = "Decoder Type", value = if (video.isEncrypted1ca) "1CA Stream Decryptor + HW/SW" else "HW + Classic MX SW Fallback (x265 compatible)")
+                DetailRow(label = "Decoder Type", value = if (video.isEncrypted1ca) "Secure Stream Decryptor + HW/SW" else "HW + Classic MX SW Fallback (x265 compatible)")
                 DetailRow(label = "Date Modified", value = dateStr)
 
                 Spacer(modifier = Modifier.height(20.dp))
